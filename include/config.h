@@ -6,8 +6,11 @@ General Configuration
 --------------------------------------------------------------------------------*/
 #define VERSION "v1.9.0" // internal program version
 
-#define WIFI_RECONNECT 30000 // Delay between wifi reconnection tries
-#define MQTT_RECONNECT 10000 // Delay between mqtt reconnection tries
+#define WIFI_RECONNECT 30000     // First delay between wifi reconnection tries
+#define WIFI_RECONNECT_MAX 300000 // Backoff cap for wifi reconnection tries
+#define MQTT_RECONNECT 10000     // First delay between mqtt reconnection tries
+#define MQTT_RECONNECT_MAX 300000 // Backoff cap for mqtt reconnection tries
+#define MQTT_CONNECT_STALL 30000  // A connect attempt that has not resolved by now is wedged
 
 struct s_cfg_jaro {
   unsigned long masterMSB;
