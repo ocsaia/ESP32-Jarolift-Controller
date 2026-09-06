@@ -1,0 +1,22 @@
+# 16 MB flash layout, used by the esp32s3_16mb environment.
+#
+# Same shape as the framework's min_spiffs.csv - dual OTA app slots, one data
+# partition, coredump - so nothing about the OTA path or the filesystem mount
+# changes, only the sizes:
+#
+#   * app0 stays at 0x10000. The OTA images published for the 4 MB targets are
+#     plain application binaries, and moving the application offset would make
+#     them incompatible, so it is kept identical on purpose.
+#   * 4 MB per app slot. The firmware is ~1.5 MB today, which leaves room to
+#     grow without ever having to move the offset again.
+#   * the rest goes to the data partition. It must keep the name "spiffs":
+#     LittleFS.begin() (src/config.cpp, src/webUI.cpp) looks the partition up
+#     by that label, not by subtype.
+#
+# Name,     Type, SubType,  Offset,   Size,     Flags
+nvs,        data, nvs,      0x9000,   0x5000,
+otadata,    data, ota,      0xE000,   0x2000,
+app0,       app,  ota_0,    0x10000,  0x400000,
+app1,       app,  ota_1,    0x410000, 0x400000,
+spiffs,     data, spiffs,   0x810000, 0x7E0000,
+coredump,   data, coredump, 0xFF0000, 0x10000,

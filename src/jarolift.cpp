@@ -68,17 +68,12 @@ void mqttSendPositionGroup(uint16_t group_mask, uint8_t position) {
 
 /**
  * *******************************************************************
- * @brief   send remote command via mqtt
- * @param   serial, function, rssi
+ * @brief   log a received remote signal and forward it via mqtt
+ * @param   serial, function, channel
  * @return  none
  * *******************************************************************/
 void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
 
-  if (!mqttIsConnected()) {
-    return;
-  }
-
-  char topic[MQTT_TOPIC_BUF_LEN];
   char fun[8];
   char chBIN[18];
   int pos = 0;
@@ -107,6 +102,20 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
     snprintf(fun, sizeof(fun), "0x%x", function);
     break;
   }
+
+  // The web log is the only feedback a user gets for a remote button press, so
+  // it is written before anything that can bail out - with the broker down or
+  // MQTT disabled the press used to disappear completely.
+  ESP_LOGI(TAG, "received remote signal | serial: 0x%08lx | cmd: %s, | channel: %s", serial, fun, chBIN);
+
+  // Everything below only produces MQTT traffic. This runs in loop() straight
+  // after the RX burst, so building the JSON document and scanning the remote
+  // list while disconnected would be pure heap churn with no consumer.
+  if (!mqttIsConnected()) {
+    return;
+  }
+
+  char topic[MQTT_TOPIC_BUF_LEN];
 
   // unknown as default
   const char *remoteName = "unknown";
@@ -149,8 +158,6 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
   snprintf(topic, sizeof(topic), "%s/status/remote/%08lx", config.mqtt.topic, serial);
 
   mqttPublish(topic, sendremoteJSON, false);
-
-  ESP_LOGI(TAG, "received remote signal | serial: 0x%08lx | cmd: %s, | channel: %s", serial, fun, chBIN);
 }
 
 /**
