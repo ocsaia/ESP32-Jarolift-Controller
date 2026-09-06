@@ -235,11 +235,35 @@ void mqttHaConfig(statType statType, const char *name, const char *deviceClass, 
   }
   serializeJson(doc, jsonString);
 
-  if (resetMqttConfig && devType == DEV_SHUTTER) {
-    mqttPublish(configTopic, "", false);
+  // Retained, so the entities survive a Home Assistant restart that happens
+  // while this device is offline. That is what B7 is about - but it also means
+  // a config published once stays on the broker until it is explicitly cleared,
+  // which is why the reset path below and mqttHaClear() now cover every entity
+  // type rather than only the covers.
+  if (resetMqttConfig) {
+    mqttPublish(configTopic, "", true);
   } else {
-    mqttPublish(configTopic, jsonString, false);
+    mqttPublish(configTopic, jsonString, true);
   }
+}
+
+/**
+ * *******************************************************************
+ * @brief   remove a retained discovery config from the broker
+ * @details A zero length retained payload deletes the retained message. Needed
+ *          because the configs are retained now: a channel that is switched off
+ *          would otherwise keep its entity in Home Assistant forever, where
+ *          before it simply stopped being re-announced and expired on its own at
+ *          the next restart.
+ * @param   component, name
+ * @return  none
+ * *******************************************************************/
+static void mqttHaClear(const char *component, const char *name) {
+  char configTopic[256];
+  if (!topicPrintf(configTopic, sizeof(configTopic), "%s/%s/%s/%s/config", discoveryPrefix, component, deviceId, name)) {
+    return;
+  }
+  mqttPublish(configTopic, "", true);
 }
 
 /**
@@ -259,22 +283,27 @@ void mqttDiscoverySetup(bool reset) {
   snprintf(deviceId, sizeof(deviceId), "%s", config.mqtt.ha_device);
   snprintf(swVersion, sizeof(swVersion), "%s", VERSION);
 
-  // Shutter Control 1..16
+  // Shutter Control 1..16 - every channel is visited, not only the enabled ones:
+  // a disabled channel has to have its retained config actively removed.
   for (int i = 0; i < 16; i++) {
+    char shutter[32];
+    snprintf(shutter, sizeof(shutter), "shutter%d", i + 1);
     if (config.jaro.ch_enable[i]) {
-      char shutter[32];
-      snprintf(shutter, sizeof(shutter), "shutter%d", i + 1);
       mqttHaConfig(TYP_SHUTTER, shutter, "shutter", "cover", NULL, "{{ value | int }}", "mdi:window-shutter", DEV_SHUTTER,
                    shutterPar(i + 1, config.jaro.ch_name[i]));
+    } else {
+      mqttHaClear("cover", shutter);
     }
   }
-  // Group Control 1..6
+  // Group Control 1..6 - same treatment
   for (int i = 0; i < 6; i++) {
+    char group[32];
+    snprintf(group, sizeof(group), "group%d", i + 1);
     if (config.jaro.grp_enable[i]) {
-      char group[32];
-      snprintf(group, sizeof(group), "group%d", i + 1);
       mqttHaConfig(TYP_GROUP, group, "shutter", "cover", NULL, NULL, "mdi:window-shutter-settings", DEV_SHUTTER,
                    shutterPar(i + 1, config.jaro.grp_name[i]));
+    } else {
+      mqttHaClear("cover", group);
     }
   }
   // Service Buttons
@@ -291,6 +320,12 @@ void mqttDiscoverySetup(bool reset) {
     mqttHaConfig(TYP_ETH, "eth_status", NULL, "sensor", NULL, "{{ value_json.status }}", "mdi:lan", DEV_TEXT, nullPar());
     mqttHaConfig(TYP_ETH, "eth_link_speed", NULL, "sensor", "Mbps", "{{ value_json.link_speed }}", "mdi:lan", DEV_TEXT, nullPar());
     mqttHaConfig(TYP_ETH, "eth_full_duplex", NULL, "sensor", NULL, "{{ value_json.full_duplex }}", "mdi:lan", DEV_TEXT, nullPar());
+  } else {
+    // ethernet turned off after it had been announced once
+    mqttHaClear("sensor", "eth_ip");
+    mqttHaClear("sensor", "eth_status");
+    mqttHaClear("sensor", "eth_link_speed");
+    mqttHaClear("sensor", "eth_full_duplex");
   }
 
   mqttHaConfig(TYP_SYSINFO, "restart_reason", NULL, "sensor", NULL, "{{ value_json.restart_reason }}", "mdi:information-outline", DEV_TEXT,
