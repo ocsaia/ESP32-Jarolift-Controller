@@ -416,19 +416,26 @@ void sendSysInfo() {
  * @return  none
  * *******************************************************************/
 void getUptime(char *buffer, size_t bufferSize) {
-  static unsigned long previousMillis = 0;
-  static unsigned long overflowCounter = 0;
-  const unsigned long overflowThreshold = 4294967295;
+  // All three callers run in the loop() task - sendSysInfo() via messageCyclic(),
+  // updateSystemInfoElements() via webUICyclic(), cmdInfo() via cyclicTelnet(),
+  // all called from loop() in main.cpp - so the static wrap state needs no
+  // synchronisation. Keep it that way.
+  static uint32_t previousMillis = 0;
+  static uint32_t wrapCounter = 0;
 
-  unsigned long currentMillis = millis();
+  uint32_t currentMillis = millis();
   if (currentMillis < previousMillis) {
-    // overflow detected
-    overflowCounter++;
+    // millis() wrapped around
+    wrapCounter++;
   }
   previousMillis = currentMillis;
 
-  // calculate total uptime in seconds considering overflow
-  unsigned long long totalSeconds = overflowCounter * (overflowThreshold / 1000ULL) + (currentMillis / 1000ULL);
+  // Rebuild the total in milliseconds and divide once. The old code added
+  // (2^32 - 1) / 1000 = 4294967 whole seconds per wrap, but millis() counts
+  // 2^32 ms = 4294967.296 s, so every wrap silently lost 296 ms and the error
+  // accumulated: the reported uptime fell further behind reality with each
+  // 49.7 day period the device stayed up.
+  uint64_t totalSeconds = ((static_cast<uint64_t>(wrapCounter) << 32) + currentMillis) / 1000ULL;
 
   unsigned long days = totalSeconds / 86400;
   unsigned long hours = (totalSeconds % 86400) / 3600;

@@ -190,12 +190,50 @@ Already written and shipped there; small enough to re-implement by hand.
 | D6 | Unbounded `sprintf` into 256-byte topic buffers; `jsonString[1024]` can truncate a discovery payload silently so the entity never appears. | `src/mqttDiscovery.cpp:72,78,112,137,177` |
 | D7 | `GithubRelease` leaked on every repeated "check version" click when an update is available. | `src/webUIupdates.cpp:303-315` |
 
-Minor: dead `if (position < 0)` on a `uint8_t` and a 64-byte topic buffer against
-a 128-byte configured topic (`src/jarolift.cpp:34`); `getUptime()` overflow
-arithmetic off by 295 ms per wrap (`src/basics.cpp:429`); flash-usage percentage
-is a ratio, not a percentage (`src/basics.cpp:392`); `Dusk2Dawn::_timezone` is
-`int` so half-hour zones truncate; dead `updateDeviceCounter(false)` at the end of
-`cmdUnlearn`; `deviceKeyMSB_/LSB_` should be `uint32_t`.
+### Minor items · re-verified against this branch, not `067f0ad`
+
+| Item | Location | status |
+|------|----------|--------|
+| Dead `if (position < 0)` on a `uint8_t` parameter | `src/jarolift.cpp:29` | `done` |
+| 64-byte topic buffer against a 128-byte configured topic. There are **two**, not one: `mqttSendPosition()` and `mqttSendRemote()`. Both now format `config.mqtt.topic` directly, which also drops these two sites' dependence on `addTopic()`'s cross-task static | `src/jarolift.cpp:29,73` | `done` |
+| `getUptime()` wrap arithmetic loses 296 ms per `millis()` wrap | `src/basics.cpp:418` | `done` |
+| "Flash-usage percentage is a ratio, not a percentage" | `src/basics.cpp:398` | `rejected` |
+| `Dusk2Dawn::_timezone` is `int`, so half-hour zones truncate | `lib/Dusk2Dawn/Dusk2Dawn.h:21` | `done` |
+| Dead `updateDeviceCounter(false)` at the end of `cmdUnlearn` | `JaroliftController.cpp:613` | `done` |
+| `deviceKeyMSB_/LSB_` should be `uint32_t` | `JaroliftController.h:81` | `done` |
+
+`rejected` — the expression is already
+`(float)ESP.getSketchSize() * 100 / ESP.getFreeSketchSpace()`; the `* 100` is
+present and byte-identical to `067f0ad`, so the figure is a percentage. The
+denominator is the *next* OTA partition rather than the running one, but
+`min_spiffs.csv` gives app0 and app1 the same `0x1E0000`, so it is correct on
+every target this project builds. It would return 0 (printing `inf %`, no crash)
+on a partition table with no second app slot — worth remembering if **F3** lands
+with an asymmetric table. The same expression is duplicated at
+`src/telnet.cpp:289` and `src/webUIupdates.cpp:132`.
+
+### D8 — astro timers fire at 23:59 during polar day / night · `done`
+
+Not in the original survey; found while fixing the items above.
+`Dusk2Dawn::sunriseSet()` reported "the sun does not cross the horizon on this
+date" as `-1`. `getSunriseOrSunset()` added the configured offset and normalised
+with `(x + 1440) % 1440`, so the sentinel became 23:59: `checkTimerTrigger()`
+matched it against the wall clock and sent the group command just before
+midnight every day, while the WebUI displayed the same fabricated time.
+
+`-1` is also a *legal* result — `sunriseSet()` does not normalise, and an event
+shortly before local midnight is a small negative number (at 70.4N / 31.1E,
+sunrise at the polar-day boundary is minute `-2`) — so testing `< 0` or `== -1`
+would have discarded real events at exactly the latitudes concerned. The library
+now returns `DUSK2DAWN_NO_EVENT` (`-30000`, outside the legal range of roughly
+`[-1456, 3076]`) and `getSunriseOrSunset()` returns `bool`.
+
+Follow-up not taken: an astro timer with `use_max_time` set used to fire at its
+configured limit during the polar season, because 1439 was clamped down to the
+maximum, and now does not fire at all. Choosing the right bound needs polar day
+and polar night told apart, which means a second sentinel out of
+`hourAngleSunrise()` and an explicit UI decision about what "no sunrise" should
+do.
 
 ---
 

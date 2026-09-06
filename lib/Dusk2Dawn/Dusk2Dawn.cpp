@@ -114,7 +114,10 @@ int Dusk2Dawn::sunriseSet(bool isRise, int y, int m, int d, bool isDST) {
     timeLocal += (isDST) ? 60 : 0;
   } else {
     // There is no sunrise or sunset, e.g. it's in the (ant)arctic.
-    timeLocal = -1;
+    // This used to be reported as -1, but -1 is also a legal result: the value
+    // below is not normalised into [0, 1440), so an event a minute before local
+    // midnight produces exactly -1 too. Callers could not distinguish the two.
+    timeLocal = DUSK2DAWN_NO_EVENT;
   }
 
   return timeLocal;

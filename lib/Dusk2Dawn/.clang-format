@@ -1,0 +1,7 @@
+# Vendored third-party library (dmkishi/Dusk2Dawn). Its 2/6-space, aligned style
+# predates this project, and CLAUDE.md tells contributors to run clang-format -i
+# on every file they touch - which would reflow this directory to the repo style
+# and turn each one-line fix into a whole-file diff against upstream. Making the
+# exemption mechanical means nobody has to remember it.
+DisableFormat: true
+SortIncludes: false
