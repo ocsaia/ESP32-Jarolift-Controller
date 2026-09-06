@@ -49,7 +49,6 @@ misbehaves.
 
 | Item | Why it did not land |
 |------|---------------------|
-| **B6** | Refuted. Dropping `optimistic:true` assumes the firmware reports real state, but `mqttSendPosition()` runs right after a blind transmit with no receiver acknowledgement. It would add latency and no accuracy. |
 | **F4** | Deliberately dropped. `EspWebUI::sendWs()` allocates the whole dump through `ws.makeBuffer()`, whose `std::make_shared<std::vector>` aborts rather than returning null with exceptions disabled - so raising the ring from 200 to 320 trades log history against a panic reboot. Chunking needs a new WebSocket command on both sides plus a regeneration of `include/gzip_*.h`. |
 
 ### New findings from review, not yet fixed
@@ -64,7 +63,22 @@ misbehaves.
 - `__detachInterrupt()` in the Arduino core has no pin bounds check - already
   guarded on this branch, but worth knowing before any other detach is added.
 
-Phase 2: **F1, F2**.
+Phase 2, in progress.
+
+**F1 core landed** on `feat/position-tracking`: the tracker, the immediate stop
+path, the notify hooks including physical remotes, the MQTT `set_position`
+contract and the Home Assistant position model - which also resolved **B6**.
+Breaking: the position convention is inverted to 0 = closed, 100 = open.
+
+Still to do for F1: **calibration** (two-phase measurement, DOWN then UP) and the
+**WebUI** - a position slider on the control page and travel-time fields plus
+calibration buttons in settings. Until then travel times have to be entered by
+editing and uploading config.json. Note that WebUI work regenerates
+`include/gzip_*.h`.
+
+**F2** (per-channel and per-group timers, weekend override, twilight modes) is
+untouched. It is the larger of the two: in the fork it rewrote the timer page
+almost completely.
 
 ---
 

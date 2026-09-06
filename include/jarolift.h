@@ -9,6 +9,14 @@ uint16_t jaroGetDevCnt();
 void jaroliftSetup();
 void jaroliftCyclic();
 
+// Sends a STOP for one channel immediately instead of queueing it. Position
+// control needs this: processJaroCommands() only runs every SEND_CYCLE ms, and
+// half a second of extra travel is a visible position error.
+void jaroStopNow(uint8_t channel);
+
+// defined in jarolift.cpp, published on <base>/status/shutter/<n>
+void mqttSendPosition(uint8_t channel, uint8_t position);
+
 enum JaroCmdType { CMD_UP, CMD_DOWN, CMD_STOP, CMD_SET_SHADE, CMD_SHADE };
 enum JaroCmdGrpType { CMD_GRP_UP, CMD_GRP_DOWN, CMD_GRP_STOP, CMD_GRP_SHADE };
 enum JaroCmdSrvType { CMD_LEARN, CMD_UNLEARN, CMD_SET_END_POINT_UP, CMD_DEL_END_POINT_UP, CMD_SET_END_POINT_DOWN, CMD_DEL_END_POINT_DOWN };

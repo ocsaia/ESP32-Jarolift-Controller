@@ -6,6 +6,7 @@
 #include <message.h>
 #include <mqtt.h>
 #include <mqttDiscovery.h>
+#include <shutterPos.h>
 
 /* D E C L A R A T I O N S ****************************************************/
 static AsyncMqttClient mqtt_client;
@@ -332,6 +333,36 @@ void mqttHandleCommand(const char *topic, const char *payload) {
   // addTopic() returns the same static buffer on every call, so shutterTopic
   // and groupTopic alias - this is only correct because checkJaroCmd() consumes
   // the first one before the second call. Do not reorder these four lines.
+  // Position commands need a topic of their own: the plain command topic
+  // already maps the payloads "0".."4" to UP/DOWN/STOP/SHADE/SETSHADE, so a
+  // percentage could not be told apart from a command word there. This is also
+  // what Home Assistant's cover expects as set_position_topic.
+  const char *setPosPrefix = addTopic("/cmd/shutter/");
+  size_t setPosPrefixLen = strlen(setPosPrefix);
+  if (strncmp(topic, setPosPrefix, setPosPrefixLen) == 0) {
+    const char *rest = topic + setPosPrefixLen;
+    char *endPtr = NULL;
+    long ch = strtol(rest, &endPtr, 10);
+    if (endPtr != rest && strcmp(endPtr, "/set_position") == 0) {
+      if (ch < 1 || ch > 16) {
+        mqttPublish(addTopic("/message"), "invalid channel", false);
+        ESP_LOGW(TAG, "invalid channel for position cmd");
+        return;
+      }
+      char *posEnd = NULL;
+      long pct = strtol(payload, &posEnd, 10);
+      if (posEnd == payload || *posEnd != 0 || pct < 0 || pct > 100) {
+        mqttPublish(addTopic("/message"), "invalid position", false);
+        ESP_LOGW(TAG, "invalid position payload: %s", payload);
+        return;
+      }
+      if (!shutterPosSetTarget((uint8_t)(ch - 1), (uint8_t)pct)) {
+        mqttPublish(addTopic("/message"), "position not available", false);
+      }
+      return;
+    }
+  }
+
   const char *shutterTopic = addTopic("/cmd/shutter/");
   int channel = checkJaroCmd(topic, shutterTopic, 16);
   const char *groupTopic = addTopic("/cmd/group/");

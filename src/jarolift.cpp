@@ -4,6 +4,7 @@
 #include <jarolift.h>
 #include <mqtt.h>
 #include <queue>
+#include <shutterPos.h>
 #include <timer.h>
 
 #define MAX_CMD 20
@@ -12,9 +13,12 @@
 // a suffix, so anything smaller truncates silently and publishes to a path
 // nobody subscribed to. 256 also matches addTopic()'s own buffer.
 #define MQTT_TOPIC_BUF_LEN 256
-#define POS_OPEN 0
-#define POS_CLOSE 100
-#define POS_SHADE 90
+// Home Assistant's cover convention: 0 is closed, 100 is open. This firmware
+// used the inverse until position tracking arrived, and the two cannot coexist -
+// see the commit message for what it means for existing MQTT automations.
+#define POS_OPEN 100
+#define POS_CLOSE 0
+#define POS_SHADE 10
 
 static muTimer cmdTimer = muTimer();
 static muTimer timerTimer = muTimer();
@@ -62,6 +66,24 @@ void mqttSendPositionGroup(uint16_t group_mask, uint8_t position) {
     // check if channel is in group
     if (group_mask & (1 << c)) {
       mqttSendPosition(c, position);
+    }
+  }
+}
+
+/**
+ * *******************************************************************
+ * @brief   tell the position tracker about a movement of a whole group
+ * @param   group_mask, goingDown
+ * @return  none
+ * *******************************************************************/
+void notifyPositionGroup(uint16_t group_mask, bool goingDown) {
+  for (uint8_t c = 0; c < 16; c++) {
+    if (group_mask & (1 << c)) {
+      if (goingDown) {
+        shutterPosNotifyDown(c);
+      } else {
+        shutterPosNotifyUp(c);
+      }
     }
   }
 }
@@ -126,12 +148,18 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
       // check if this remote is registered for one or more shutter
       for (int j = 0; j < 16; j++) {
         if (config.jaro.remote_mask[i] & (1 << j)) {
+          // A physical remote moves the shutter just as much as this controller
+          // does, so the estimate has to follow it - otherwise one press of a
+          // wall remote invalidates every position until the next end-stop.
           switch (function) {
           case 0x2:
-            mqttSendPosition(j, POS_CLOSE);
+            shutterPosNotifyDown(j);
             break;
           case 0x8:
-            mqttSendPosition(j, POS_OPEN);
+            shutterPosNotifyUp(j);
+            break;
+          case 0x4:
+            shutterPosNotifyStop(j);
             break;
           case 0x3:
             mqttSendPosition(j, POS_SHADE);
@@ -235,6 +263,23 @@ void jaroliftSetup() {
   ESP_LOGI(TAG, "read Device Counter from FLASH: %i", jarolift.getDeviceCounter());
 
   jarolift.setRemoteCallback(mqttSendRemote);
+
+  shutterPosSetup();
+}
+
+/**
+ * *******************************************************************
+ * @brief   send a STOP for one channel without going through the queue
+ * @details processJaroCommands() runs every SEND_CYCLE ms, so a queued STOP can
+ *          be up to half a second late. On a shutter that takes ~25 s end to end
+ *          that is a 2 % position error on every timed stop, which is the whole
+ *          accuracy budget of this feature.
+ * @param   channel
+ * @return  none
+ * *******************************************************************/
+void jaroStopNow(uint8_t channel) {
+  jarolift.cmdChannel(JaroliftController::CMD_STOP, channel);
+  ESP_LOGI(TAG, "execute cmd: STOP (immediate) - channel: %i", channel + 1);
 }
 
 void jaroCmdSetDevCnt(uint16_t value) { jarolift.setDeviceCounter(value); };
@@ -256,19 +301,23 @@ void processJaroCommands() {
       switch (cmd.single.type) {
       case CMD_UP:
         jarolift.cmdChannel(JaroliftController::CMD_UP, cmd.single.channel);
-        mqttSendPosition(cmd.single.channel, POS_OPEN);
+        // The tracker owns the position from here on - it publishes when the
+        // movement settles, so there is exactly one place that decides what the
+        // position is. For an uncalibrated channel it settles immediately at the
+        // end position, which is the behaviour this line used to provide.
+        shutterPosNotifyUp(cmd.single.channel);
         ESP_LOGI(TAG, "execute cmd: UP - channel: %i", cmd.single.channel + 1);
         break;
       case CMD_DOWN:
         jarolift.cmdChannel(JaroliftController::CMD_DOWN, cmd.single.channel);
-        mqttSendPosition(cmd.single.channel, POS_CLOSE);
+        shutterPosNotifyDown(cmd.single.channel);
         ESP_LOGI(TAG, "execute cmd: DOWN - channel: %i", cmd.single.channel + 1);
         break;
       case CMD_STOP:
         jarolift.cmdChannel(JaroliftController::CMD_STOP, cmd.single.channel);
-        // Deliberately no position: after a STOP the shutter stands somewhere between
-        // the end points and the receiver gives no feedback, so any value would be a
-        // guess. The last known position stays until F1 can interpolate a real one.
+        // A STOP used to publish nothing, because the position it landed on was
+        // a guess. With a calibrated travel time it is an interpolation instead.
+        shutterPosNotifyStop(cmd.single.channel);
         ESP_LOGI(TAG, "execute cmd: STOP - channel: %i", cmd.single.channel + 1);
         break;
       case CMD_SET_SHADE:
@@ -292,16 +341,21 @@ void processJaroCommands() {
       case CMD_GRP_UP:
         jarolift.cmdGroup(JaroliftController::CMD_UP, cmd.group.group_mask);
         ESP_LOGI(TAG, "execute group cmd: UP - mask: %04X", cmd.group.group_mask);
-        mqttSendPositionGroup(cmd.group.group_mask, POS_OPEN);
+        notifyPositionGroup(cmd.group.group_mask, false);
         break;
       case CMD_GRP_DOWN:
         jarolift.cmdGroup(JaroliftController::CMD_DOWN, cmd.group.group_mask);
         ESP_LOGI(TAG, "execute group cmd: DOWN - mask: %04X", cmd.group.group_mask);
-        mqttSendPositionGroup(cmd.group.group_mask, POS_CLOSE);
+        notifyPositionGroup(cmd.group.group_mask, true);
         break;
       case CMD_GRP_STOP:
         jarolift.cmdGroup(JaroliftController::CMD_STOP, cmd.group.group_mask);
         ESP_LOGI(TAG, "execute group cmd: STOP - mask: %04X", cmd.group.group_mask);
+        for (uint8_t c = 0; c < 16; c++) {
+          if (cmd.group.group_mask & (1 << c)) {
+            shutterPosNotifyStop(c);
+          }
+        }
         break;
       case CMD_GRP_SHADE:
         jarolift.cmdGroup(JaroliftController::CMD_SHADE, cmd.group.group_mask);
@@ -353,6 +407,10 @@ void jaroliftCyclic() {
   if (cmdTimer.cycleTrigger(SEND_CYCLE)) {
     processJaroCommands();
   }
+
+  // every pass, not on a timer: a timed stop should fire as soon as its
+  // deadline passes, and the loop is already delayed by whatever the radio does
+  shutterPosCyclic();
 
   if (timerTimer.cycleTrigger(10000)) {
     timerCyclic();
