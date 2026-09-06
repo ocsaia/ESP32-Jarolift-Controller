@@ -878,6 +878,11 @@ void JaroliftController::begin() {
   pinMode(gpio_.gdo2, INPUT_PULLUP);
   attachInterrupt(gpio_.gdo2, radioRxMeasureISR, CHANGE);
 
+  // init() leaves the CC1101 in IDLE, so attaching the interrupt is not enough:
+  // without this the receiver stays deaf until the first transmission happens to
+  // enter RX as a side effect at the end of cmdChannel().
+  enterRx();
+
   initOK_ = true;
 }
 
