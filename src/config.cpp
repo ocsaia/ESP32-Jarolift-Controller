@@ -220,6 +220,10 @@ void configInitValue() {
   // Logger
   config.log.level = 4;
 
+  // Jarolift: new learn method (button code 0xA), which was the value the
+  // removed forcing block effectively pinned learn_mode to.
+  config.jaro.learn_mode = true;
+
   // WiFi
   config.wifi.enable = true;
   snprintf(config.wifi.hostname, sizeof(config.wifi.hostname), "ESP32-Jarolift");
@@ -343,9 +347,6 @@ void configSaveToFile() {
   doc["jaro"]["masterLSB"] = config.jaro.masterLSB;
   doc["jaro"]["serial"] = config.jaro.serial;
 
-  if (config.jaro.learn_mode == 0) {
-    config.jaro.learn_mode = 4; // ESP_LOG_DEBUG
-  }
   doc["jaro"]["learn_mode"] = config.jaro.learn_mode;
 
   JsonArray ch_enable = doc["jaro"]["ch_enable"].to<JsonArray>();
@@ -635,9 +636,6 @@ void configFinalCheck() {
   }
 
   // check log level
-  if (config.jaro.learn_mode == 0) {
-    config.jaro.learn_mode = 4; // ESP_LOG_DEBUG
-  }
   setLogLevel(config.log.level);
 
   // check GIO for LED
