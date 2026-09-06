@@ -8,6 +8,10 @@
 
 #define MAX_CMD 20
 #define SEND_CYCLE 500
+// Topics are built from config.mqtt.topic (128 bytes, include/config.h:86) plus
+// a suffix, so anything smaller truncates silently and publishes to a path
+// nobody subscribed to. 256 also matches addTopic()'s own buffer.
+#define MQTT_TOPIC_BUF_LEN 256
 #define POS_OPEN 0
 #define POS_CLOSE 100
 #define POS_SHADE 90
@@ -27,16 +31,20 @@ JaroliftController jarolift;
  * @return  none
  * *******************************************************************/
 void mqttSendPosition(uint8_t channel, uint8_t position) {
-  char topic[64];
+  char topic[MQTT_TOPIC_BUF_LEN];
   char pos[16];
 
+  // position is a uint8_t parameter, so only the upper bound can be violated
   if (position > 100)
     position = 100;
-  if (position < 0)
-    position = 0;
+
   if (mqttIsConnected()) {
     itoa(position, pos, 10);
-    snprintf(topic, sizeof(topic), "%s%d", addTopic("/status/shutter/"), channel + 1);
+    // Formatted straight from the configured base topic rather than through
+    // addTopic(): a 64 byte buffer truncated the result for any base topic
+    // beyond ~47 characters, and addTopic() hands out a pointer into a single
+    // static that the AsyncTCP task overwrites from onMqttConnect().
+    snprintf(topic, sizeof(topic), "%s/status/shutter/%d", config.mqtt.topic, channel + 1);
     mqttPublish(topic, pos, true);
   }
 }
@@ -70,7 +78,7 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
     return;
   }
 
-  char topic[64];
+  char topic[MQTT_TOPIC_BUF_LEN];
   char fun[8];
   char chBIN[18];
   int pos = 0;
@@ -136,7 +144,9 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
 
   char sendremoteJSON[255];
   serializeJson(remoteJSON, sendremoteJSON);
-  snprintf(topic, sizeof(topic), "%s%08lx", addTopic("/status/remote/"), serial);
+  // Same reasoning as mqttSendPosition(): one snprintf from the configured base
+  // topic, no truncation and no pointer into addTopic()'s shared static.
+  snprintf(topic, sizeof(topic), "%s/status/remote/%08lx", config.mqtt.topic, serial);
 
   mqttPublish(topic, sendremoteJSON, false);
 

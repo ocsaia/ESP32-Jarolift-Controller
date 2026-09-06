@@ -610,7 +610,6 @@ void JaroliftController::cmdUnlearn(uint8_t channel) {
   radioTx(2);
   updateDeviceCounter(true);
   enterRx();
-  updateDeviceCounter(false);
 }
 
 /**

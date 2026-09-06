@@ -78,43 +78,85 @@ void executeCommand(const s_cfg_timer &timer, uint8_t number) {
  * @param   offset: Time offset in minutes.
  * @param   latitude: Latitude.
  * @param   longitude: Longitude.
- * @param   hour: Sunrise or sunset hour.
- * @param   minute: Sunrise or sunset minute.
- * @return  none
+ * @param   hour: Sunrise or sunset hour, only valid if true is returned.
+ * @param   minute: Sunrise or sunset minute, only valid if true is returned.
+ * @return  true if the event exists on the current day, false otherwise
  * *******************************************************************
  */
-void getSunriseOrSunset(uint8_t type, int16_t offset, float latitude, float longitude, uint8_t &hour, uint8_t &minute) {
+bool getSunriseOrSunset(uint8_t type, int16_t offset, float latitude, float longitude, uint8_t &hour, uint8_t &minute) {
 
-  int16_t timeInMinutes;
+  // Latched per event type: timerCyclic() calls this for every enabled astro
+  // timer on each minute change and the WebUI adds two more calls per refresh,
+  // so an unlatched line would churn the 200 entry web log for a whole polar
+  // season. Demoting to ESP_LOGD would not help - config.log.level defaults to
+  // 4, which setLogLevel() maps to ESP_LOG_DEBUG. Both callers run in the
+  // loop() task, so the latch needs no synchronisation.
+  static bool noEventReported[3] = {false, false, false};
+
+  // int, not int16_t: Dusk2Dawn does not normalise its result and the offset is
+  // an unbounded config field, so the sum must be wider than the day it is
+  // reduced into.
+  int eventMinutes;
   time_t now;
   tm dti, utcTime;
   time(&now);
   localtime_r(&now, &dti);  // local Time
   gmtime_r(&now, &utcTime); // UTC Time
 
+  // Always leave the out parameters defined, so a caller that ignores the
+  // return value cannot read uninitialised stack.
+  hour = 0;
+  minute = 0;
+
+  if (type != TYPE_SUNRISE && type != TYPE_SUNDOWN) {
+    return false;
+  }
+
+  // gmtime_r() leaves tm_isdst at 0, so mktime() reads the UTC fields as local
+  // standard time and this difference is the standard offset. sunriseSet() adds
+  // the DST hour itself from dti.tm_isdst - together that is one DST hour, not
+  // two.
   float utcOffset = static_cast<float>(difftime(mktime(&dti), mktime(&utcTime))) / 3600.0;
 
   Dusk2Dawn location(latitude, longitude, utcOffset);
 
   if (type == TYPE_SUNRISE) {
-    timeInMinutes = location.sunrise(dti.tm_year + 1900, dti.tm_mon + 1, dti.tm_mday, dti.tm_isdst);
-  } else if (type == TYPE_SUNDOWN) {
-    timeInMinutes = location.sunset(dti.tm_year + 1900, dti.tm_mon + 1, dti.tm_mday, dti.tm_isdst);
+    eventMinutes = location.sunrise(dti.tm_year + 1900, dti.tm_mon + 1, dti.tm_mday, dti.tm_isdst);
   } else {
-    hour = 0;
-    minute = 0;
-    return;
+    eventMinutes = location.sunset(dti.tm_year + 1900, dti.tm_mon + 1, dti.tm_mday, dti.tm_isdst);
   }
 
-  // add offset
-  timeInMinutes += offset;
+  // Polar day / polar night: there is no event to report. The old code fed the
+  // library's sentinel through the offset and the wrap below, which turned "no
+  // sunrise today" into 23:59 and fired the timer just before midnight.
+  if (eventMinutes == DUSK2DAWN_NO_EVENT) {
+    if (!noEventReported[type]) {
+      noEventReported[type] = true;
+      ESP_LOGW(TAG, "no %s on this date (polar day/night)", (type == TYPE_SUNRISE) ? "sunrise" : "sunset");
+    }
+    return false;
+  }
+  noEventReported[type] = false;
 
-  // check for overflow
-  timeInMinutes = (timeInMinutes + 1440) % 1440;
+  // A full day of offset already lands on the same clock time, so anything
+  // beyond that is a typo in a config field the WebUI does not bound.
+  if (offset > 1440) {
+    offset = 1440;
+  } else if (offset < -1440) {
+    offset = -1440;
+  }
+  eventMinutes += offset;
+
+  // Normalise into [0, 1440). Dusk2Dawn returns the raw minute count, which is
+  // negative for an event shortly before local midnight - real at high latitude
+  // - and above 1440 for far eastern time zones. The plain (x + 1440) % 1440
+  // only covered the range [-1440, 1440).
+  eventMinutes = ((eventMinutes % 1440) + 1440) % 1440;
 
   // convert to hour and minute
-  hour = timeInMinutes / 60;
-  minute = timeInMinutes % 60;
+  hour = eventMinutes / 60;
+  minute = eventMinutes % 60;
+  return true;
 }
 
 /**
@@ -182,7 +224,15 @@ bool checkTimerTrigger(const s_cfg_timer &timer, uint8_t currentHour, uint8_t cu
     return (timerTotal >= 0 && timerTotal == currentTotal);
   } else if (timer.type == TYPE_SUNRISE || timer.type == TYPE_SUNDOWN) {
     uint8_t eventHour, eventMinute;
-    getSunriseOrSunset(timer.type, timer.offset_value, config.geo.latitude, config.geo.longitude, eventHour, eventMinute);
+    // Polar day / polar night: the event does not exist today, so there is
+    // nothing to trigger on. Before this check the sentinel wrapped to 23:59 and
+    // the group command went out just before midnight, every day. The min/max
+    // window is deliberately not used as a fallback - it bounds an event, it
+    // does not define one, so firing at the limit would invent a schedule the
+    // user never configured.
+    if (!getSunriseOrSunset(timer.type, timer.offset_value, config.geo.latitude, config.geo.longitude, eventHour, eventMinute)) {
+      return false;
+    }
 
     // Clamp on minutes since midnight. Clamping the hour and the minute
     // independently moved the event to a time that was neither the astro event

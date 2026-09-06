@@ -78,8 +78,12 @@ private:
   Config config_;
   uint16_t devCount_;
 
-  int deviceKeyMSB_;
-  int deviceKeyLSB_;
+  // 32 bit KeeLoq device keys. Keeloq::decrypt() produces them as unsigned long
+  // and Keeloq() consumes them as unsigned long again; holding them in a signed
+  // int made every key with bit 31 set depend on implementation-defined
+  // conversion behaviour for no reason.
+  uint32_t deviceKeyMSB_;
+  uint32_t deviceKeyLSB_;
 
   uint64_t button_;
   uint8_t discL_;
