@@ -297,26 +297,60 @@ void otaProgressCallback(int progress) {
  * *******************************************************************/
 bool startCheckGitHubVersion;
 void requestGitHubVersion() { startCheckGitHubVersion = true; }
+
+/**
+ * *******************************************************************
+ * @brief   free the cached GitHub release and reset it to an empty state
+ * @details ghFreeRelease() only free()s the strings - it leaves every member of
+ *          the struct dangling and the asset vector populated, so a second free
+ *          would be a double free and flashFirmware() would strcmp() freed asset
+ *          names. Overwriting the struct afterwards drops those pointers, which
+ *          is what makes this safe to call on every path and more than once.
+ *          ghReleaseInfo is derived from the same fetch and is cleared with it,
+ *          so the two can never end up describing different releases.
+ * @param   none
+ * @return  none
+ * *******************************************************************/
+static void ghReleaseClear() {
+  ghFreeRelease(ghLatestRelease);
+  ghLatestRelease = GithubRelease{};
+  ghReleaseInfo = GithubReleaseInfo{};
+}
+
 void processGitHubVersion() {
   if (startCheckGitHubVersion) {
     startCheckGitHubVersion = false;
+
+    // ghGetLatestRelease() assigns a freshly allocated release over the struct,
+    // so whatever is still held here has to go first. Without this, a repeated
+    // "check version" while an update was available made the previous
+    // allocation unreachable - a whole release including every asset string.
+    ghReleaseClear();
+
     if (ghGetLatestRelease(&ghLatestRelease, &ghReleaseInfo, espInfo.chipSeries)) {
       webUI.wsUpdateWebBusy("p00_dialog_git_version", false);
       webUI.wsUpdateWebText("p00_dialog_git_version", ghReleaseInfo.tag, false);
       webUI.wsUpdateWebHref("p00_dialog_git_version", ghReleaseInfo.url);
-      // if new version is available, show update button
+      // if new version is available, show update button and keep the release -
+      // processGitHubUpdate() needs its asset list to flash the firmware
       if (strcmp(ghReleaseInfo.tag, VERSION) != 0 && ghReleaseInfo.assetFound) {
         char buttonTxt[32];
         snprintf(buttonTxt, sizeof(buttonTxt), "Update %s", ghReleaseInfo.tag);
         webUI.wsUpdateWebText("p00_update_btn", buttonTxt, false);
+        webUI.wsUpdateWebDisabled("p00_update_btn", false); // a failed attempt leaves it disabled
         webUI.wsUpdateWebHideElement("p00_update_btn_hide", false);
       } else {
-        ghFreeRelease(ghLatestRelease);
+        // nothing to flash: drop the release and hide a button that an earlier
+        // check may have left on screen - clicking it used to hand the OTA an
+        // asset list whose strings had already been freed
+        ghReleaseClear();
+        webUI.wsUpdateWebHideElement("p00_update_btn_hide", true);
       }
     } else {
       webUI.wsUpdateWebBusy("p00_dialog_git_version", false);
       webUI.wsUpdateWebText("p00_dialog_git_version", "error", false);
-      ghFreeRelease(ghLatestRelease);
+      ghReleaseClear();
+      webUI.wsUpdateWebHideElement("p00_update_btn_hide", true);
     }
   }
 }
@@ -332,6 +366,20 @@ void requestGitHubUpdate() { startGitHubUpdate = true; }
 void processGitHubUpdate() {
   if (startGitHubUpdate) {
     startGitHubUpdate = false;
+
+    // The button is only hidden client side, so a stale tab can still send this
+    // after a later version check dropped the cached release. Refuse before
+    // disabling the watchdog and raising the OTA flag - that flag also suspends
+    // the cyclic WebUI refresh, and there is nothing to flash either way.
+    if (!ghReleaseInfo.assetFound || ghLatestRelease.assets.empty()) {
+      ESP_LOGW(TAG, "GitHub OTA-Update rejected: no release cached");
+      webUI.wsUpdateWebText("p00_ota_upd_err", "no release cached", false);
+      webUI.wsUpdateWebDialog("version_dialog", "close");
+      webUI.wsUpdateWebDialog("ota_update_failed_dialog", "open");
+      webUI.wsUpdateWebHideElement("p00_update_btn_hide", true);
+      return;
+    }
+
     ghSetProgressCallback(otaProgressCallback);
     webUI.wsUpdateWebText("p00_update_btn", "updating: 0%", false);
     webUI.wsUpdateWebDisabled("p00_update_btn", true);
@@ -372,6 +420,14 @@ void processGitHubUpdate() {
     }
     ota.setActive(false);
     wdt.enable();
+
+    // The cached release has served its purpose either way: after a successful
+    // flash the device is about to be restarted, after a failure the user has to
+    // run a fresh version check before another attempt. Freeing it here keeps a
+    // single owner for the allocation - ghStartOtaUpdate() no longer frees it -
+    // and stops a retry from working on a stale asset list.
+    ghReleaseClear();
+    webUI.wsUpdateWebHideElement("p00_update_btn_hide", true);
   }
 }
 

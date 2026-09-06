@@ -178,6 +178,25 @@ void jaroCmd(JaroCmdSrvType type, uint8_t channel) {
 
 /**
  * *******************************************************************
+ * @brief   push the jarolift radio settings into the controller library
+ * @details The library keeps master keys, base serial and learn mode in its own
+ *          config struct and reads them lazily on every command: generateKey()
+ *          rebuilds the device key per command, getSerial() derives the channel
+ *          serial per command and cmdLearn() reads the learn mode when it runs.
+ *          Storing the values is therefore all that is needed to make a WebUI
+ *          change effective at once - begin() reads none of the four.
+ * @param   none
+ * @return  none
+ * *******************************************************************/
+void jaroApplyRadioConfig() {
+  jarolift.setKeys(config.jaro.masterMSB, config.jaro.masterLSB);
+  jarolift.setBaseSerial(config.jaro.serial);
+  jarolift.setLegacyLearnMode(!config.jaro.learn_mode);
+  ESP_LOGD(TAG, "jarolift radio config applied");
+}
+
+/**
+ * *******************************************************************
  * @brief   Jarolift Setup function
  * @param   none
  * @return  none
@@ -187,9 +206,7 @@ void jaroliftSetup() {
   // initialize
   ESP_LOGI(TAG, "initializing the CC1101 Transceiver");
   jarolift.setGPIO(config.gpio.sck, config.gpio.miso, config.gpio.mosi, config.gpio.cs, config.gpio.gdo0, config.gpio.gdo2);
-  jarolift.setKeys(config.jaro.masterMSB, config.jaro.masterLSB);
-  jarolift.setBaseSerial(config.jaro.serial);
-  jarolift.setLegacyLearnMode(!config.jaro.learn_mode);
+  jaroApplyRadioConfig();
   jarolift.begin();
 
   if (jarolift.getCC1101State()) {
@@ -203,7 +220,6 @@ void jaroliftSetup() {
   jarolift.setRemoteCallback(mqttSendRemote);
 }
 
-void jaroCmdReInit() { jaroliftSetup(); };
 void jaroCmdSetDevCnt(uint16_t value) { jarolift.setDeviceCounter(value); };
 uint16_t jaroGetDevCnt() { return jarolift.getDeviceCounter(); };
 bool getCC1101State() { return jarolift.getCC1101State(); };
