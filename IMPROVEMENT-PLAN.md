@@ -50,17 +50,17 @@ misbehaves.
 |------|---------------------|
 | **B6** | Refuted. Dropping `optimistic:true` assumes the firmware reports real state, but `mqttSendPosition()` runs right after a blind transmit with no receiver acknowledgement. It would add latency and no accuracy. |
 | **B7** | Refuted as designed. Retaining the birth message treats it as once-per-connect, but `messageCyclic()` publishes it every 10 s. Retaining discovery configs also removes the self-expiry that currently cleans up entities for disabled channels. A correct version needs a separate `mqttPublishBirth()` and an explicit clear path. |
-| **D6** (mqttDiscovery half) | Still worth doing - unbounded `sprintf` into 256-byte topic buffers and a silent `jsonString[1024]` truncation that makes an entity vanish. It arrived entangled with the B6 rework and needs redesigning alone. The `jarolift.cpp` half is done (`MQTT_TOPIC_BUF_LEN`). |
 | **F4** | Deliberately dropped. `EspWebUI::sendWs()` allocates the whole dump through `ws.makeBuffer()`, whose `std::make_shared<std::vector>` aborts rather than returning null with exceptions disabled - so raising the ring from 200 to 320 trades log history against a panic reboot. Chunking needs a new WebSocket command on both sides plus a regeneration of `include/gzip_*.h`. |
 
 ### New findings from review, not yet fixed
 
-- `AsyncMqttClient::setWill()` stores the bare topic pointer instead of copying
-  it, and `mqttSetup()` passes it `addTopic()`'s shared static buffer - the LWT
-  topic is clobbered by the next `addTopic()` call, so the last-will may be
-  registered on a wrong topic.
+- ~~`AsyncMqttClient::setWill()` stores the bare topic pointer~~ - fixed on
+  `fix/mqtt-robustness`.
 - `lib_deps` pulls AsyncTCP twice (3.5.0 transitively via ESPAsyncWebServer,
-  plus the pinned 3.3.6). It builds, but which one links is unclear.
+  plus the pinned 3.3.6). **Checked: not a defect.** Only one object is ever
+  compiled - `.pio/build/esp32/libc09/AsyncTCP@3.3.6/AsyncTCP.cpp.o` - so the
+  pinned version is the one that links and the 3.5.0 copy is an unused
+  download.
 - `__detachInterrupt()` in the Arduino core has no pin bounds check - already
   guarded on this branch, but worth knowing before any other detach is added.
 

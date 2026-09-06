@@ -3,8 +3,10 @@
 #include <message.h>
 #include <mqtt.h>
 #include <mqttDiscovery.h>
+#include <stdarg.h>
 
 /* D E C L A R A T I O N S ****************************************************/
+static const char *TAG = "HA-DISC"; // LOG TAG
 char discoveryPrefix[128];
 char deviceName[32];
 char statePrefix[128];
@@ -46,6 +48,31 @@ const char *valueTmpl(ValTmpType type) {
 
 /**
  * *******************************************************************
+ * @brief   format a topic and report instead of truncating silently
+ * @details The topics are built from configured strings - the discovery prefix,
+ *          the base topic and the device id - so their length is not a compile
+ *          time property. They fit comfortably today, but a silently cut topic
+ *          is the worst outcome available here: it does not fail, it publishes
+ *          somewhere else, and two entities whose names differ only past the cut
+ *          would quietly share one topic.
+ * @param   dst, dstLen, fmt, ...
+ * @return  true if the whole string fitted
+ * *******************************************************************/
+static bool topicPrintf(char *dst, size_t dstLen, const char *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  int needed = vsnprintf(dst, dstLen, fmt, args);
+  va_end(args);
+
+  if (needed < 0 || (size_t)needed >= dstLen) {
+    ESP_LOGE(TAG, "topic does not fit (%d bytes needed, %u available) - entity skipped", needed, (unsigned)dstLen);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * *******************************************************************
  * @brief   generate mqtt messages for home assistant auto discovery
  * @param   kmType
  * @param   name
@@ -69,32 +96,46 @@ void mqttHaConfig(statType statType, const char *name, const char *deviceClass, 
   char cmdTopic[256];
   char configTopic[256];
 
-  sprintf(configTopic, "%s/%s/%s/%s/config", discoveryPrefix, component, deviceId, name);
+  if (!topicPrintf(configTopic, sizeof(configTopic), "%s/%s/%s/%s/config", discoveryPrefix, component, deviceId, name)) {
+
+    return;
+
+  }
 
   char stateTopic[256];
   switch (statType) {
 
   case TYP_SHUTTER:
-    sprintf(stateTopic, "%s/status/shutter/%i", statePrefix, devCfg.num1);
+    if (!topicPrintf(stateTopic, sizeof(stateTopic), "%s/status/shutter/%i", statePrefix, devCfg.num1)) {
+      return;
+    }
     doc["stat_t"] = stateTopic;
     break;
 
   case TYP_STATUS:
-    sprintf(stateTopic, "%s/status/%s", statePrefix, name);
+    if (!topicPrintf(stateTopic, sizeof(stateTopic), "%s/status/%s", statePrefix, name)) {
+      return;
+    }
     doc["stat_t"] = stateTopic;
     break;
 
   case TYP_WIFI:
-    sprintf(stateTopic, "%s/wifi", statePrefix);
+    if (!topicPrintf(stateTopic, sizeof(stateTopic), "%s/wifi", statePrefix)) {
+      return;
+    }
     doc["stat_t"] = stateTopic;
     break;
   case TYP_ETH:
-    sprintf(stateTopic, "%s/eth", statePrefix);
+    if (!topicPrintf(stateTopic, sizeof(stateTopic), "%s/eth", statePrefix)) {
+      return;
+    }
     doc["stat_t"] = stateTopic;
     break;
 
   case TYP_SYSINFO:
-    sprintf(stateTopic, "%s/sysinfo", statePrefix);
+    if (!topicPrintf(stateTopic, sizeof(stateTopic), "%s/sysinfo", statePrefix)) {
+      return;
+    }
     doc["stat_t"] = stateTopic;
     break;
   default:
@@ -110,7 +151,9 @@ void mqttHaConfig(statType statType, const char *name, const char *deviceClass, 
   }
 
   char uniq_id[128];
-  sprintf(uniq_id, "%s_%s", deviceName, name);
+  if (!topicPrintf(uniq_id, sizeof(uniq_id), "%s_%s", deviceName, name)) {
+    return;
+  }
   doc["uniq_id"] = uniq_id;
 
   if (deviceClass) {
@@ -136,22 +179,30 @@ void mqttHaConfig(statType statType, const char *name, const char *deviceClass, 
     doc["pl_stop"] = "STOP";
 
     if (statType == TYP_GROUP) {
-      sprintf(cmdTopic, "%s/cmd/group/%i", statePrefix, devCfg.num1);
+      if (!topicPrintf(cmdTopic, sizeof(cmdTopic), "%s/cmd/group/%i", statePrefix, devCfg.num1)) {
+        return;
+      }
       doc["cmd_t"] = cmdTopic;
     } else if (statType == TYP_SHUTTER) {
       doc["state_open"] = "0";
       doc["state_closed"] = "100";
-      sprintf(cmdTopic, "%s/cmd/shutter/%i", statePrefix, devCfg.num1);
+      if (!topicPrintf(cmdTopic, sizeof(cmdTopic), "%s/cmd/shutter/%i", statePrefix, devCfg.num1)) {
+        return;
+      }
       doc["cmd_t"] = cmdTopic;
     }
 
   } else if (devType == DEV_BTN) {
-    sprintf(cmdTopic, "%s/cmd/%s", statePrefix, name);
+    if (!topicPrintf(cmdTopic, sizeof(cmdTopic), "%s/cmd/%s", statePrefix, name)) {
+      return;
+    }
     doc["cmd_t"] = cmdTopic;
     doc["payload_press"] = "true";
     doc["ent_cat"] = "config";
   } else if (devType != DEV_TEXT) {
-    sprintf(cmdTopic, "%s/cmd/%s", statePrefix, name);
+    if (!topicPrintf(cmdTopic, sizeof(cmdTopic), "%s/cmd/%s", statePrefix, name)) {
+      return;
+    }
     doc["cmd_t"] = cmdTopic;
   }
 
@@ -173,6 +224,15 @@ void mqttHaConfig(statType statType, const char *name, const char *deviceClass, 
   deviceObj["sw"] = swVersion;
 
   char jsonString[1024];
+  // serializeJson() into a fixed array truncates rather than failing, and a
+  // truncated discovery payload is not rejected loudly by Home Assistant - the
+  // entity simply never appears, which is a hard thing to trace back to here.
+  size_t jsonLen = measureJson(doc);
+  if (jsonLen >= sizeof(jsonString)) {
+    ESP_LOGE(TAG, "discovery payload for '%s' does not fit (%u bytes needed, %u available) - entity skipped", name, (unsigned)jsonLen,
+             (unsigned)sizeof(jsonString));
+    return;
+  }
   serializeJson(doc, jsonString);
 
   if (resetMqttConfig && devType == DEV_SHUTTER) {

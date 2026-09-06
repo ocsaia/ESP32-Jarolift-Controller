@@ -159,7 +159,16 @@ void mqttSetup() {
   mqtt_client.setServer(config.mqtt.server, config.mqtt.port);
   mqtt_client.setClientId(config.wifi.hostname);
   mqtt_client.setCredentials(config.mqtt.user, config.mqtt.password);
-  mqtt_client.setWill(addTopic("/status"), 0, true, "offline");
+  // setWill() stores the pointer it is given, it does not copy the string, and
+  // addTopic() hands out a pointer into one shared static buffer that the next
+  // caller overwrites. The last will was therefore registered on whatever topic
+  // happened to be in that buffer when the CONNECT packet went out, so a device
+  // that dropped off the network never went "offline" where Home Assistant was
+  // listening. Give the will topic storage of its own, with static duration
+  // because the client keeps using it for the lifetime of the connection.
+  static char willTopic[sizeof(config.mqtt.topic) + 16];
+  snprintf(willTopic, sizeof(willTopic), "%s/status", config.mqtt.topic);
+  mqtt_client.setWill(willTopic, 0, true, "offline");
   mqtt_client.setKeepAlive(10);
   mqtt_client.connected();
 
