@@ -23,7 +23,7 @@ SPIClass *SPI_2;
 s_espInfo espInfo;
 
 static muTimer wifiReconnectTimer = muTimer(); // timer for reconnect delay
-static int wifi_retry = 0;
+static unsigned long wifiRetryDelay = WIFI_RECONNECT;
 static const char *TAG = "SETUP"; // LOG TAG
 
 /**
@@ -47,7 +47,7 @@ void ntpSetup() {
  * @return  none
  * *******************************************************************/
 void onWiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
-  wifi_retry = 0;
+  wifiRetryDelay = WIFI_RECONNECT; // a successful association resets the backoff
   ESP_LOGI(TAG, "Connected to AP successfully!");
 }
 
@@ -84,24 +84,28 @@ void onWiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info) {
 void checkWiFi() {
 
   // Ethernet is also not connected - so we need to establish WiFi
-  if (wifiReconnectTimer.delayOnTrigger((!wifi.connected && !eth.connected), WIFI_RECONNECT)) {
+  if (wifiReconnectTimer.delayOnTrigger((!wifi.connected && !eth.connected), wifiRetryDelay)) {
     wifiReconnectTimer.delayReset();
 
-    if (wifi_retry < 5) {
-      wifi_retry++;
-      WiFi.mode(WIFI_STA);
-      WiFi.begin(config.wifi.ssid, config.wifi.password);
-      WiFi.hostname(config.wifi.hostname);
-      MDNS.begin(config.wifi.hostname);
-      ESP_LOGI(TAG, "WiFi Mode STA - Trying connect to: %s", config.wifi.ssid);
-      ESP_LOGI(TAG, "WiFi connection - attempt: %i/5", wifi_retry);
-    } else {
-      ESP_LOGW(TAG, "Wifi connection not possible, esp rebooting...");
-      EspSysUtil::RestartReason::saveLocal("no wifi connection");
-      yield();
-      delay(1000);
-      yield();
-      ESP.restart();
+    // B2: this used to give up after five attempts and reboot. A router that is
+    // down for longer than two and a half minutes therefore restarted the
+    // controller every two and a half minutes, forever - and a rebooting device
+    // cannot be driven from the WebUI or run its timers either, so the reboot
+    // made an outage strictly worse than riding it out. Retry without a limit
+    // instead, backing off so a long outage costs almost nothing.
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(config.wifi.ssid, config.wifi.password);
+    WiFi.hostname(config.wifi.hostname);
+    MDNS.begin(config.wifi.hostname);
+    ESP_LOGI(TAG, "WiFi Mode STA - Trying connect to: %s (retry in %lu s)", config.wifi.ssid, wifiRetryDelay / 1000UL);
+
+    // exponential backoff, capped - the cap is what keeps a device that comes
+    // back hours later from waiting hours more before it notices
+    if (wifiRetryDelay < WIFI_RECONNECT_MAX) {
+      wifiRetryDelay *= 2;
+      if (wifiRetryDelay > WIFI_RECONNECT_MAX) {
+        wifiRetryDelay = WIFI_RECONNECT_MAX;
+      }
     }
   }
 }
@@ -124,6 +128,13 @@ void setupWiFi() {
     // setup callback function
     WiFi.onEvent(onWiFiStationConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
     WiFi.onEvent(onWiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
+    // B1: onWiFiStationDisconnected() existed but was never registered, so
+    // wifi.connected latched true after the first association and nothing below
+    // ever saw the link go away. LOST_IP matters too: an association can survive
+    // a DHCP lease that does not, and without an address the device is just as
+    // unreachable.
+    WiFi.onEvent(onWiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+    WiFi.onEvent(onWiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_LOST_IP);
 
     // manual IP-Settings
     if (config.wifi.static_ip) {

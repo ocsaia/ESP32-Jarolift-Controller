@@ -23,7 +23,11 @@ static AsyncMqttClient mqtt_client;
 static bool bootUpMsgDone, setupDone = false;
 static const char *TAG = "MQTT"; // LOG TAG
 static char lastError[64] = "---";
-static int mqtt_retry = 0;
+// written from the AsyncTCP task in onMqttConnect(), read from loop() - both are
+// aligned 32-bit accesses, volatile only to stop the compiler caching them
+static volatile unsigned long mqttRetryDelay = MQTT_RECONNECT;
+static volatile bool mqttFirstAttempt = true;
+static unsigned long mqttAttemptMs = 0;
 static muTimer mqttReconnectTimer;
 
 /**
@@ -119,7 +123,7 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
  * @return  none
  * *******************************************************************/
 void onMqttConnect(bool sessionPresent) {
-  mqtt_retry = 0;
+  mqttRetryDelay = MQTT_RECONNECT; // a successful connect resets the backoff
   ESP_LOGI(TAG, "MQTT connected");
   // Once connected, publish an announcement...
   sendWiFiInfo();
@@ -215,25 +219,37 @@ void mqttCyclic() {
     setupDone = true;
   }
 
-  // automatic reconnect to mqtt broker if connection is lost - try 5 times, then reboot
+  // B2: this used to give up after five attempts and reboot. Since mqtt_retry was
+  // only cleared by a successful connect, a broker that was down stayed down and
+  // the controller restarted roughly every fifty seconds indefinitely - while
+  // booting it serves no WebUI, runs no timer and drives no shutter, so the reboot
+  // turned a broker outage into a total outage. Retry without a limit instead.
   if (!mqtt_client.connected() && (wifi.connected || eth.connected)) {
-    if (mqtt_retry == 0) {
-      mqtt_retry++;
+    if (mqttFirstAttempt) {
+      mqttFirstAttempt = false;
+      mqttAttemptMs = millis();
       mqtt_client.connect();
-      ESP_LOGI(TAG, "MQTT - connection attempt: 1/5");
-    } else if (mqttReconnectTimer.delayOnTrigger(true, MQTT_RECONNECT)) {
+      ESP_LOGI(TAG, "MQTT - connecting to broker");
+    } else if (mqttReconnectTimer.delayOnTrigger(true, mqttRetryDelay)) {
       mqttReconnectTimer.delayReset();
-      if (mqtt_retry < 5) {
-        mqtt_retry++;
-        mqtt_client.connect();
-        ESP_LOGI(TAG, "MQTT - connection attempt: %i/5", mqtt_retry);
-      } else {
-        ESP_LOGI(TAG, "MQTT connection not possible, esp rebooting...");
-        EspSysUtil::RestartReason::saveLocal("no mqtt connection");
-        yield();
-        delay(1000);
-        yield();
-        ESP.restart();
+
+      // AsyncMqttClient::connect() sets its state to CONNECTING and then ignores
+      // the return value of AsyncClient::connect(), which fails without ever
+      // firing a callback when the async task cannot start or DNS fails outright.
+      // The client then sits in CONNECTING for good. Rebooting used to be the
+      // only way out of that; tearing the client down explicitly is the cheap one.
+      if (millis() - mqttAttemptMs > MQTT_CONNECT_STALL) {
+        ESP_LOGW(TAG, "MQTT - connect attempt did not resolve, forcing disconnect");
+        mqtt_client.disconnect(true);
+      }
+
+      mqttAttemptMs = millis();
+      mqtt_client.connect();
+      ESP_LOGI(TAG, "MQTT - retry (next in %lu s)", mqttRetryDelay / 1000UL);
+
+      if (mqttRetryDelay < MQTT_RECONNECT_MAX) {
+        unsigned long next = mqttRetryDelay * 2;
+        mqttRetryDelay = (next > MQTT_RECONNECT_MAX) ? MQTT_RECONNECT_MAX : next;
       }
     }
   }
