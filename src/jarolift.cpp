@@ -266,15 +266,24 @@ void processJaroCommands() {
         break;
       case CMD_STOP:
         jarolift.cmdChannel(JaroliftController::CMD_STOP, cmd.single.channel);
+        // Deliberately no position: after a STOP the shutter stands somewhere between
+        // the end points and the receiver gives no feedback, so any value would be a
+        // guess. The last known position stays until F1 can interpolate a real one.
         ESP_LOGI(TAG, "execute cmd: STOP - channel: %i", cmd.single.channel + 1);
         break;
       case CMD_SET_SHADE:
         jarolift.cmdChannel(JaroliftController::CMD_SET_SHADE, cmd.single.channel);
-        mqttSendPosition(cmd.single.channel, POS_SHADE);
+        // Teaching the shade point stores wherever the shutter currently stands, it
+        // does not move it. Publishing POS_SHADE here reported a movement that never
+        // happened and left Home Assistant showing a position the shutter is not in.
         ESP_LOGI(TAG, "execute cmd: SETSHADE - channel: %i", cmd.single.channel + 1);
         break;
       case CMD_SHADE:
         jarolift.cmdChannel(JaroliftController::CMD_SHADE, cmd.single.channel);
+        // This is the command that actually drives to the shade point, so this is
+        // where the position changes - matching CMD_GRP_SHADE and the remote path,
+        // which have always published here.
+        mqttSendPosition(cmd.single.channel, POS_SHADE);
         ESP_LOGI(TAG, "execute cmd: SHADE - channel: %i", cmd.single.channel + 1);
         break;
       }
