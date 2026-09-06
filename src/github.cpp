@@ -61,7 +61,16 @@ bool ghGetLatestRelease(GithubRelease *release, GithubReleaseInfo *info, const c
   *release = ota.getLatestRelease();
 
   // check if the release is valid
-  if (release->tag_name == nullptr || release->html_url == nullptr) {
+  // Order matters here: html_url has a default member initialiser in the
+  // library's struct, tag_name has none. When the HTTP request fails,
+  // getLatestRelease() returns an object whose tag_name still holds whatever was
+  // on the stack, so it must be neither read nor free()d. A non-null html_url
+  // proves makeRelease() ran, and with it that tag_name holds a real value.
+  if (release->html_url == nullptr) {
+    release->tag_name = nullptr; // may be indeterminate - keep the caller's free safe
+    return false;
+  }
+  if (release->tag_name == nullptr) {
     return false;
   }
 
@@ -86,18 +95,22 @@ bool ghGetLatestRelease(GithubRelease *release, GithubReleaseInfo *info, const c
 /**
  * *******************************************************************
  * @brief   start the OTA update
+ * @details the release stays owned by the caller, it is only read here
  * @param   release
  * @param   asset
  * @return  0 if successful, else error code
  * *******************************************************************/
-int ghStartOtaUpdate(GithubRelease release, const char *asset) {
+int ghStartOtaUpdate(const GithubRelease &release, const char *asset) {
   int result = ota.flashFirmware(release, asset);
 
   if (result == 0) {
     ESP_LOGI(TAG, "Firmware updated successfully");
   } else {
+    // no freeRelease() here: the release used to be taken by value, so freeing
+    // it released the strings of a shallow copy and left the caller's struct
+    // pointing at freed memory, which a retry then read back. One owner, in
+    // webUIupdates.cpp.
     ESP_LOGE(TAG, "Firmware update failed: %i", result);
-    ota.freeRelease(release);
   }
   return result;
 }

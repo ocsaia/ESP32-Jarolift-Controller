@@ -8,6 +8,6 @@ struct GithubReleaseInfo {
 };
 
 bool ghGetLatestRelease(GithubRelease *release, GithubReleaseInfo *info, const char *espSeries);
-int ghStartOtaUpdate(GithubRelease release, const char *asset);
+int ghStartOtaUpdate(const GithubRelease &release, const char *asset);
 void ghSetProgressCallback(void (*callback)(int));
 void ghFreeRelease(GithubRelease &release);

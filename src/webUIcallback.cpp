@@ -201,21 +201,24 @@ void webCallback(const char *elementId, const char *value) {
   }
 
   // Jarolift settings
+  // These four values only have to reach the library's own config - it reads
+  // them on every command - so re-initialising the CC1101 here is not needed.
+  // The learn-mode switch still takes effect without a restart.
   if (strcmp(elementId, "cfg_jaro_masterMSB") == 0) {
     config.jaro.masterMSB = strtoul(value, NULL, 16);
-    jaroCmdReInit();
+    jaroApplyRadioConfig();
   }
   if (strcmp(elementId, "cfg_jaro_masterLSB") == 0) {
     config.jaro.masterLSB = strtoul(value, NULL, 16);
-    jaroCmdReInit();
+    jaroApplyRadioConfig();
   }
   if (strcmp(elementId, "cfg_jaro_serial") == 0) {
     config.jaro.serial = strtoul(value, NULL, 16);
-    jaroCmdReInit();
+    jaroApplyRadioConfig();
   }
   if (strcmp(elementId, "cfg_jaro_learn_mode") == 0) {
     config.jaro.learn_mode = EspStrUtil::stringToBool(value);
-    jaroCmdReInit();
+    jaroApplyRadioConfig();
   }
   if (strcmp(elementId, "p12_jaro_devcnt") == 0) {
     jaroCmdSetDevCnt(strtoul(value, NULL, 10));

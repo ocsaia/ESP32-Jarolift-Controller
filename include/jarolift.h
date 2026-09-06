@@ -1,7 +1,7 @@
 #pragma once
 
 void jaroCmdSetDevCnt(uint16_t value);
-void jaroCmdReInit();
+void jaroApplyRadioConfig();
 bool getCC1101State();
 uint8_t getCC1101Rssi();
 uint16_t jaroGetDevCnt();
