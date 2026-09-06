@@ -94,6 +94,7 @@ void mqttHaConfig(statType statType, const char *name, const char *deviceClass, 
 
   JsonDocument doc;
   char cmdTopic[256];
+  char setPosTopic[256];
   char configTopic[256];
 
   if (!topicPrintf(configTopic, sizeof(configTopic), "%s/%s/%s/%s/config", discoveryPrefix, component, deviceId, name)) {
@@ -171,25 +172,39 @@ void mqttHaConfig(statType statType, const char *name, const char *deviceClass, 
 
   if (devType == DEV_SHUTTER) {
 
-    // Enable optimistic mode for a device with no state feedback
-    doc["optimistic"] = true;
-
     doc["pl_open"] = "OPEN";
     doc["pl_cls"] = "CLOSE";
     doc["pl_stop"] = "STOP";
 
     if (statType == TYP_GROUP) {
+      // A group addresses several shutters at once and has no state of its own -
+      // nothing ever publishes a group position - so optimistic is the truthful
+      // description here, and it stays.
+      doc["optimistic"] = true;
       if (!topicPrintf(cmdTopic, sizeof(cmdTopic), "%s/cmd/group/%i", statePrefix, devCfg.num1)) {
         return;
       }
       doc["cmd_t"] = cmdTopic;
     } else if (statType == TYP_SHUTTER) {
-      doc["state_open"] = "0";
-      doc["state_closed"] = "100";
+      // B6: a single shutter is no longer optimistic. It used to be, which made
+      // Home Assistant discard everything published to stat_t - so the firmware
+      // computed a position and then asked HA to ignore it. The channel now
+      // reports a real percentage on pos_t, and accepts one on set_pos_t.
+      doc["pos_t"] = stateTopic;
+      doc["pos_open"] = 100;
+      doc["pos_clsd"] = 0;
+      // value_template belongs to stat_t; keeping it alongside pos_t makes Home
+      // Assistant reject the whole config
+      doc.remove("val_tpl");
+      doc.remove("stat_t");
       if (!topicPrintf(cmdTopic, sizeof(cmdTopic), "%s/cmd/shutter/%i", statePrefix, devCfg.num1)) {
         return;
       }
       doc["cmd_t"] = cmdTopic;
+      if (!topicPrintf(setPosTopic, sizeof(setPosTopic), "%s/cmd/shutter/%i/set_position", statePrefix, devCfg.num1)) {
+        return;
+      }
+      doc["set_pos_t"] = setPosTopic;
     }
 
   } else if (devType == DEV_BTN) {

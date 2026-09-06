@@ -19,6 +19,14 @@ struct s_cfg_jaro {
   uint32_t serial;
   char ch_name[16][64]{"\0"};
   bool ch_enable[16];
+  // Full travel time per direction, in milliseconds, 0 = not calibrated.
+  // These belong in the persisted config: they are a property of the
+  // installation and change only on calibration. The estimated position does
+  // NOT live here - configCyclic() hashes this whole struct every second and
+  // rewrites the entire config.json on any change, so a value that moves while
+  // a shutter runs would mean a flash write per movement.
+  uint32_t ch_travel_down[16];
+  uint32_t ch_travel_up[16];
   char grp_name[6][64]{"\0"};
   bool grp_enable[6];
   uint16_t grp_mask[6];

@@ -10,8 +10,9 @@
 /**
  * V1: Initial version of dewenni.
  * V2: Added min/max times for timers.
+ * V3: Added per-channel travel times for time-based position control.
  */
-const int CFG_VERSION = 2;
+const int CFG_VERSION = 3;
 
 char filename[24] = {"/config.json"};
 bool setupMode;
@@ -359,6 +360,16 @@ void configSaveToFile() {
     ch_name.add(config.jaro.ch_name[i]);
   }
 
+  JsonArray ch_travel_down = doc["jaro"]["ch_travel_down"].to<JsonArray>();
+  for (int i = 0; i < 16; i++) {
+    ch_travel_down.add(config.jaro.ch_travel_down[i]);
+  }
+
+  JsonArray ch_travel_up = doc["jaro"]["ch_travel_up"].to<JsonArray>();
+  for (int i = 0; i < 16; i++) {
+    ch_travel_up.add(config.jaro.ch_travel_up[i]);
+  }
+
   JsonArray grp_enable = doc["jaro"]["grp_enable"].to<JsonArray>();
   for (int i = 0; i < 6; i++) {
     grp_enable.add(config.jaro.grp_enable[i]);
@@ -554,6 +565,16 @@ void configLoadFromFile() {
     JsonArray ch_name = doc["jaro"]["ch_name"].as<JsonArray>();
     for (int i = 0; i < 16; i++) {
       EspStrUtil::readJSONstring(config.jaro.ch_name[i], sizeof(config.jaro.ch_name[0]), ch_name[i]);
+    }
+    // absent in a V2 config: a missing key reads as 0, which is exactly the
+    // "not calibrated" value, so no migration step is needed
+    JsonArray ch_travel_down = doc["jaro"]["ch_travel_down"].as<JsonArray>();
+    for (int i = 0; i < 16; i++) {
+      config.jaro.ch_travel_down[i] = ch_travel_down[i];
+    }
+    JsonArray ch_travel_up = doc["jaro"]["ch_travel_up"].as<JsonArray>();
+    for (int i = 0; i < 16; i++) {
+      config.jaro.ch_travel_up[i] = ch_travel_up[i];
     }
     JsonArray grp_enable = doc["jaro"]["grp_enable"].as<JsonArray>();
     for (int i = 0; i < 6; i++) {
