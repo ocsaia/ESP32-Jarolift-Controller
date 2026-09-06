@@ -70,7 +70,7 @@ void checkGPIO() {
         return true;
       }
     }
-    if (usedCount < MAX_GPIO - 1) {
+    if (usedCount < MAX_GPIO) {
       usedGPIOs[usedCount++] = gpio;
     }
     return false;
@@ -470,9 +470,8 @@ void configLoadFromFile() {
       EspStrUtil::readJSONstring(config.wifi.password, sizeof(config.wifi.password), doc["wifi"]["password"]);
     } else {
       EspStrUtil::readJSONstring(encrypted, sizeof(encrypted), doc["wifi"]["password"]);
-      if (EspStrUtil::decryptPassword(encrypted, key, config.wifi.password, sizeof(config.wifi.password))) {
-        // ESP_LOGD(TAG, "decrypted WiFi password: %s", config.wifi.password);
-      } else {
+      if (!EspStrUtil::decryptPassword(encrypted, key, config.wifi.password, sizeof(config.wifi.password))) {
+        config.wifi.password[0] = 0;
         ESP_LOGE(TAG, "error decrypting WiFi password");
       }
     }
@@ -488,7 +487,6 @@ void configLoadFromFile() {
     EspStrUtil::readJSONstring(config.eth.hostname, sizeof(config.eth.hostname), doc["eth"]["hostname"]);
     config.eth.static_ip = doc["eth"]["static_ip"];
     EspStrUtil::readJSONstring(config.eth.ipaddress, sizeof(config.eth.ipaddress), doc["eth"]["ipaddress"]);
-    EspStrUtil::readJSONstring(config.eth.ipaddress, sizeof(config.eth.ipaddress), doc["eth"]["ipaddress"]);
     EspStrUtil::readJSONstring(config.eth.subnet, sizeof(config.eth.subnet), doc["eth"]["subnet"]);
     EspStrUtil::readJSONstring(config.eth.gateway, sizeof(config.eth.gateway), doc["eth"]["gateway"]);
     EspStrUtil::readJSONstring(config.eth.dns, sizeof(config.eth.dns), doc["eth"]["dns"]);
@@ -503,15 +501,14 @@ void configLoadFromFile() {
     EspStrUtil::readJSONstring(config.mqtt.server, sizeof(config.mqtt.server), doc["mqtt"]["server"]);
     EspStrUtil::readJSONstring(config.mqtt.user, sizeof(config.mqtt.user), doc["mqtt"]["user"]);
 
-    EspStrUtil::readJSONstring(config.mqtt.password, sizeof(config.mqtt.password), doc["mqtt"]["password"]);
-
     if (config.version == 0) {
       EspStrUtil::readJSONstring(config.mqtt.password, sizeof(config.mqtt.password), doc["mqtt"]["password"]);
     } else {
       EspStrUtil::readJSONstring(encrypted, sizeof(encrypted), doc["mqtt"]["password"]);
-      if (EspStrUtil::decryptPassword(encrypted, key, config.mqtt.password, sizeof(config.mqtt.password))) {
-        // ESP_LOGD(TAG, "decrypted mqtt password: %s", config.mqtt.password);
-      } else {
+      if (!EspStrUtil::decryptPassword(encrypted, key, config.mqtt.password, sizeof(config.mqtt.password))) {
+        // Leaving the field as it is would keep either the ciphertext or a
+        // partial result and make every broker login fail for good.
+        config.mqtt.password[0] = 0;
         ESP_LOGE(TAG, "error decrypting mqtt password");
       }
     }
