@@ -1,0 +1,265 @@
+# Improvement Plan
+
+Working backlog for this fork. Every item was verified against the code at
+`067f0ad` (upstream `dewenni/main`, v1.9.0) — line references point there.
+
+Legend:
+- **status** `open` = present in upstream and not fixed anywhere
+- **status** `port` = already fixed in `Banabas/ESP32-Jarolift-PositionController`,
+  must be **re-implemented by hand** (that fork has no common git history with
+  upstream, so `cherry-pick` / `rebase` / `merge` are not possible)
+- **status** `done` = landed on this fork, on the branch named below
+
+## Progress
+
+Phase 1a (build hygiene + ported fixes) is complete. Every commit builds clean
+for `esp32` with zero warnings from project sources.
+
+| Branch | Items |
+|--------|-------|
+| `chore/dependency-pins` | E1 |
+| `chore/release-artifacts-opt-in` | E3 |
+| `fix/rx-at-boot` | C1 |
+| `fix/learn-mode-switch` | C2 |
+| `fix/format-string-vulnerability` | C3, E2 |
+| `fix/timer-minmax-clamp` | C4 |
+| `fix/config-load-robustness` | C5, C6, C7 |
+| `fix/dusk2dawn-include-case` | C8 |
+| `docs/claude-md-and-plan` | E4 |
+
+The two `chore/` branches are the shared base for the rest: nothing builds
+without E1, and E3 stops development builds from destroying the committed
+release artifacts.
+
+Remaining for phase 1: **A1, A2, A3, B1-B7, D1-D7, F3-F5**. Phase 2: **F1, F2**.
+
+---
+
+## A. Crash / memory corruption (P0)
+
+None of these are fixed in the Banabas fork — verified byte-identical there.
+These are the likely causes of unexplained reboots.
+
+### A1 — RX ISR overruns the pulse buffer · `open`
+
+`lib/JaroliftController/JaroliftController.cpp:368-402`, buffer declared in
+`JaroliftController.h:94-97` (`kPulseBufferSize = 216`).
+
+`pbWrite_` is incremented with no bound check in both branches:
+
+```cpp
+lowBuf_[pbWrite_] = lowVal;  pbWrite_++;   // HIGH edge
+hiBuf_[pbWrite_]  = highVal;               // LOW edge
+```
+
+The only reset is `currentMicros - timeout > 3500`, but every accepted pulse
+refreshes `timeout`. Any 433 MHz burst with >216 edges in the 300–1000 µs range
+spaced closer than 3.5 ms writes past both buffers into `pbWrite_`, `rxSerial_`,
+`rxFunction_`, `initOK_`, `rxDataReady_` and `cc1101_`. A valid Jarolift frame is
+~73 pulses, so the headroom is small for a shared ISM band.
+
+Fix: clamp `pbWrite_` (`if (pbWrite_ >= kPulseBufferSize) { pbWrite_ = 0; return; }`)
+in both branches, and snapshot the buffers under `portENTER_CRITICAL` before
+decoding in `processRxData()`.
+
+Verify: feed a long noise burst (or a second 433 MHz transmitter) and confirm no
+reset; assert `pbWrite_ < kPulseBufferSize` in a debug build.
+
+### A2 — `mqttCmdQueue` is used from two tasks without synchronisation · `open`
+
+Producer `addMqttCmd()` `src/mqtt.cpp:34-49` runs in the **AsyncTCP task**
+(via `onMqttMessage`); consumer `processMqttMessage()` `src/mqtt.cpp:325,433`
+runs in `loop()`. `std::queue`/`std::deque` is not thread-safe — concurrent
+push/pop corrupts the heap. Reproducible by a retained-message burst on
+HA restart.
+
+Fix: replace with a FreeRTOS queue (preferred), or guard every access with a
+mutex. See **B4** — the same primitive should serve the WebUI path.
+
+### A3 — Uninitialised payload buffer · `port`
+
+`src/mqtt.cpp:100-105`:
+
+```cpp
+if (payload == NULL)                      { msgCpy.payload[0] = '\0'; }
+else if (len > 0 && len < PAYLOAD_LEN)    { memcpy(...); msgCpy.payload[len] = '\0'; }
+// no else -> len == 0 or len >= 512 leaves the stack buffer uninitialised
+```
+
+`len == 0` is the normal way to clear a retained topic, so this is hit in normal
+operation. Add the missing `else`. Fragmented messages (`index`/`total`) are also
+unhandled.
+
+---
+
+## B. Functional bugs (P1)
+
+### B1 — WiFi disconnect event is never registered · `open`
+
+`onWiFiStationDisconnected()` exists at `src/basics.cpp:60` but only
+`STA_CONNECTED` and `GOT_IP` are bound at `src/basics.cpp:125-126`. So
+`wifi.connected` stays `true` forever after the first connect: the UI reports
+"connected" with no link, `checkWiFi()` never reconnects, and `mqttCyclic()`
+keeps seeing a live link — which drives **B2**.
+
+### B2 — WiFi/MQTT outage reboots the device in a loop · `open`
+
+`src/basics.cpp:99-104` (5 × 30 s) and `src/mqtt.cpp:231-236` (5 × 10 s) call
+`ESP.restart()`. `mqtt_retry` only resets on a successful connect, so a broker
+outage reboots the controller roughly every 50 s indefinitely, and the shutters
+are uncontrollable while it boots. Replace with unbounded retry and exponential
+backoff (10 s → 5 min cap); never reboot a working device because a network peer
+is down.
+
+### B3 — Telnet passes channel `-1` into array indexing · `open`
+
+`src/telnet.cpp:193-214` and `222-244`: `int channel = -1;` stays `-1` when no
+number is given, then `jaroCmd(CMD_UP, channel - 1)` → `uint8_t` 254 →
+`discLowArr_[254]` out of bounds; `cmdGroup` does `config.jaro.grp_mask[-1]`.
+Reachable by typing `shutter up` / `group up`.
+
+Fix in both places, **and** add the missing bounds check to
+`JaroliftController::cmdChannel()` / `cmdGroup()` so the library defends itself.
+
+### B4 — WebUI callback is a single slot shared across tasks · `open`
+
+`src/webUI.cpp:26-28, 86-90, 119-122`. The AsyncTCP task writes
+`webCallbackElementID` / `webCallbackValue` / `webCallbackAvailable`; `loop()`
+processes **one** event per iteration. A settings form that sends several changed
+fields in one burst loses all but the last — worse while `loop()` sits inside a
+multi-second radio command. The flags are not `volatile`/atomic either.
+
+Fix: FreeRTOS queue (same primitive as **A2**).
+
+Note: this is the likely mechanism behind the `remote_serial[0]` field that never
+stuck on the live device.
+
+### B5 — SHADE position feedback is inverted · `open`
+
+`src/jarolift.cpp:216-243`: `CMD_SET_SHADE` (teach the shade position) publishes
+`POS_SHADE`, while `CMD_SHADE` (drive to it) publishes nothing. The group path
+(`CMD_GRP_SHADE`) and the remote path (`function == 0x3`) both publish, so single
+SHADE is the outlier.
+
+> Superseded if **F1** (position control) is taken — that replaces the fixed
+> 0/90/100 scheme entirely. Do not fix twice.
+
+### B6 — HA discovery sets `optimistic: true` while also publishing state · `open`
+
+`src/mqttDiscovery.cpp:129-145`. With `optimistic` on, Home Assistant ignores
+`stat_t`, so everything `mqttSendPosition()` publishes is discarded. Also
+`POS_SHADE = 90` matches neither `state_open="0"` nor `state_closed="100"`.
+Either drop `optimistic` and use the state properly, or stop publishing position.
+
+> Same supersession note as **B5**.
+
+### B7 — Discovery configs are published without `retain` · `open`
+
+`src/mqttDiscovery.cpp:177`. If HA restarts while the ESP is offline, every
+entity disappears. The `homeassistant/status` subscription only partly
+compensates. HA convention is retained discovery configs.
+
+---
+
+## C. Fixes to port from the Banabas fork
+
+Already written and shipped there; small enough to re-implement by hand.
+
+| # | Item | Upstream location | Fork release | status |
+|---|------|-------------------|--------------|--------|
+| C1 | `enterRx()` missing at end of `begin()` — receiver stays in IDLE, so remote reception is dead until the first transmission. Identical to upstream **PR #61**. | `JaroliftController.cpp:879` | v1.21.4 | `done` |
+| C2 | `learn_mode` forced back to `true` by a copy/paste leftover from the log-level code (`== 0` → `= 4` on a `bool`), **and** `setLegacyLearnMode()` never called, so the WebUI switch reached nothing. | `src/config.cpp:346,638`; `src/jarolift.cpp:193` | v1.21.4 | `done` |
+| C3 | Format-string vulnerability: 12 WebUI fields pass user text as the `printf` format (a `%` in a WiFi password corrupts/crashes), plus one in `basics.cpp`. | `src/webUIcallback.cpp:53,56,59,65,68,71,74,82,106,109,112,115`; `src/basics.cpp:276` | v1.21.0 | `done` |
+| C4 | Timer min/max clamp: `uint8_t` holding `getHour()`'s `-1` becomes 255 and `>= 0` is always true; the minute clamp is applied separately from the hour, so 05:30 with min 07:15 yields 07:30. | `src/timer.cpp:171-191` | v1.20/1.21 | `done` |
+| C5 | MQTT password can stay as raw ciphertext when decryption fails after a partial config read → permanent auth failure → reconnect/reboot loop (feeds **B2**). | `src/config.cpp:512` area | v1.21.0 | `done` |
+| C6 | GPIO duplicate-pin check off-by-one: `usedCount < MAX_GPIO - 1` never records the 20th pin. | `src/config.cpp:70` | v1.21.0 | `done` |
+| C7 | Duplicate `eth.ipaddress` read in `configLoadFromFile()`. | `src/config.cpp:~500` | v1.20.0 | `done` |
+| C8 | `Dusk2Dawn` includes `<Math.h>` instead of `<math.h>` — build fails on case-sensitive filesystems (Linux/CI). Hidden on Windows. | `lib/Dusk2Dawn/Dusk2Dawn.cpp:8`, `.h:11` | v1.21.4 | `done` |
+
+---
+
+## D. Robustness (P2)
+
+| # | Item | Location |
+|---|------|----------|
+| D1 | `steadyCount_` is `unsigned int` and starts at 0; the first non-STOP frame decrements it to `0xFFFFFFFF`, so remote SHADE detection needs 12 consecutive STOPs to recover. Also never decays and is not per-remote. | `JaroliftController.cpp:831-837` |
+| D2 | `remoteCallback` invoked without a null check; `begin()` enables the interrupt before `setRemoteCallback()` runs. | `JaroliftController.cpp:845` |
+| D3 | No `detachInterrupt` around TX — the RX ISR jitters the bit-banged `delayMicroseconds` timing. `loop()` re-`attachInterrupt`s repeatedly; `detachInterrupt` appears nowhere in the codebase. | `JaroliftController.cpp:879,900` |
+| D4 | NVS opened/closed per command plus a pointless `delay(100)` per write; `cmdUnlearn` spends ~800 ms just waiting. Keep one `nvs_handle` and the counter in RAM. | `JaroliftController.cpp:103-146` |
+| D5 | `jaroCmdReInit()` runs a full `jaroliftSetup()` (EEPROM, `cc1101.init()`, another `attachInterrupt`) on every key/serial field change — three fields means three full re-inits. | `src/webUIcallback.cpp:205-218` |
+| D6 | Unbounded `sprintf` into 256-byte topic buffers; `jsonString[1024]` can truncate a discovery payload silently so the entity never appears. | `src/mqttDiscovery.cpp:72,78,112,137,177` |
+| D7 | `GithubRelease` leaked on every repeated "check version" click when an update is available. | `src/webUIupdates.cpp:303-315` |
+
+Minor: dead `if (position < 0)` on a `uint8_t` and a 64-byte topic buffer against
+a 128-byte configured topic (`src/jarolift.cpp:34`); `getUptime()` overflow
+arithmetic off by 295 ms per wrap (`src/basics.cpp:429`); flash-usage percentage
+is a ratio, not a percentage (`src/basics.cpp:392`); `Dusk2Dawn::_timezone` is
+`int` so half-hour zones truncate; dead `updateDeviceCounter(false)` at the end of
+`cmdUnlearn`; `deviceKeyMSB_/LSB_` should be `uint32_t`.
+
+---
+
+## E. Build & infrastructure
+
+| # | Item |
+|---|------|
+| E1 | **Git dependency pins are broken.** `EspWebUI @ 0.0.4` does not resolve — a plain git URL cannot be version-pinned this way, and upstream moved to 0.0.7, so a clean checkout fails to build. Fixed locally to `#v0.0.4`. `EspStrUtil @ 1.1.0` and `EspSysUtil @ 1.1.0` work only by accident (EspSysUtil's newest *tag* is v1.0.1; 1.1.0 is untagged HEAD), and `ESP_Git_OTA` has no constraint at all. Pin all four by tag or commit SHA. |
+| E2 | Add `-Wformat=2 -Wno-format-nonliteral` to `build_flags`. `-Wall` alone misses **C3** entirely; with the flag the compiler flags all 13 sites and nothing else. |
+| E3 | `release/*.bin` are tracked **and** rewritten by `scripts/build_release.py` on every build — building a single target deletes the other targets' binaries. Either gitignore them on this fork or `git checkout -- release/` after each build. |
+| E4 | No `CLAUDE.md`. Add one covering: build commands, the **E3** trap, the **E1** pin syntax, `.clang-format`, and the task-context rule (AsyncTCP vs `loop()`) that **A2**/**B4** exist because of. |
+
+Baseline measurements (`pio run -e esp32`, after the E1 fix):
+
+| Build | Flash | Static RAM |
+|-------|-------|------------|
+| upstream v1.9.0 | 77.0 % (1 514 752 B) | 27.5 % |
+| Banabas v1.21.4 | 78.1 % (1 534 912 B) | 32.9 % |
+
+---
+
+## F. Features available in the Banabas fork
+
+Scope decision pending — see the note at the top of **B5**/**B6**.
+
+| # | Feature | Fork release | Notes |
+|---|---------|--------------|-------|
+| F1 | Time-based position control (0–100 %) with two-phase calibration and independent up/down travel times per channel | v1.20.0 | Large. **Breaking:** v1.21.0 inverted the convention to 0 % = closed / 100 % = open to match HA. Supersedes **B5**, **B6**. |
+| F2 | Timer rework: per-channel and per-group schedules, weekend override, astro modes (real/civil/nautical/astronomical/custom horizon) | v1.20.0 | Large. Supersedes **C4**. |
+| F3 | `esp32s3_16mb` build target with matching partition table | v1.20.0 | Small. |
+| F4 | Web log buffer 200 → 320 entries | v1.21.2 | Trivial. |
+| F5 | Remote-signal log line written even when MQTT is disconnected (`mqttSendRemote()` returned early and skipped the log) | v1.21.1 | Small, useful independently of F1. |
+| F6 | Remote-triggered UP/DOWN/STOP feed the position tracker | v1.21.3 | Depends on **F1**. |
+
+---
+
+## Suggested order
+
+1. **E1, E2, E3, E4** — make the build reproducible and the traps documented first.
+2. **C1, C2, C3, C4, C5, C6, C7, C8** — known-good fixes, each a small independent commit.
+3. **A1, A3** — self-contained P0s, no design decision needed.
+4. **A2 + B4 together** — one shared thread-safe command queue; do not solve twice.
+5. **B1 + B2 + C5 together** — network resilience is one coherent change.
+6. **B3, B7, D1–D7** — independent, parallelisable.
+7. **F-items** — only after the scope decision; **F1/F2 must land after A2/B4**,
+   because position control adds more cross-task producers to the command queue.
+
+## Branch strategy
+
+Fork from `dewenni/ESP32-Jarolift-Controller` via the GitHub UI so the common
+ancestor is preserved (the Banabas fork lost this, which is why nothing can be
+cherry-picked from it).
+
+```bash
+git remote rename origin upstream
+git remote add origin https://github.com/<user>/ESP32-Jarolift-Controller.git
+git fetch upstream && git push -u origin main
+```
+
+One branch per item off `upstream/main` so each stays independently PR-able:
+
+```bash
+git switch -c fix/rx-at-boot upstream/main
+```
+
+Keep a separate integration branch that merges them all for the firmware that
+actually runs on the device.
