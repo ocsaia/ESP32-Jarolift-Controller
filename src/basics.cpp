@@ -273,7 +273,7 @@ void basicSetup() {
     break;
   }
 
-  snprintf(espInfo.chipModel, sizeof(espInfo.chipModel), ESP.getChipModel());
+  snprintf(espInfo.chipModel, sizeof(espInfo.chipModel), "%s", ESP.getChipModel());
   ESP_LOGI(TAG, "ESP-ChipModel: %s", espInfo.chipModel);
 
   sniprintf(espInfo.chipRev, sizeof(espInfo.chipRev), "%d", ESP.getChipRevision());
