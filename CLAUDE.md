@@ -27,6 +27,14 @@ pio run -e esp32 2>&1 | grep -E '^(src|lib)/.*warning:'
 Flashing and runtime behaviour can only be checked on real hardware, which the
 agent does not have. Do not claim runtime behaviour was verified.
 
+Known environment issue: on the current Windows machine `esp32c3` fails with
+`riscv32-esp-elf-g++: fatal error: cannot execute '.../as.exe': CreateProcess:
+No such file or directory`, even though that assembler exists and runs when
+invoked directly. It reproduces on unmodified upstream code, affects every
+translation unit, and is a toolchain/OS problem rather than a source problem -
+reinstall `toolchain-riscv32-esp` to fix it. Verify changes on `esp32`,
+`esp32s2` and `esp32s3`.
+
 ## Things that will bite you
 
 **Never write `release/*.bin` from a normal build.** Those binaries are tracked
