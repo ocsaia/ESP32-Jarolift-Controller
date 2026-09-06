@@ -1,5 +1,6 @@
 
 #include <basics.h>
+#include <cmdQueue.h>
 #include <jarolift.h>
 #include <message.h>
 #include <webUI.h>
