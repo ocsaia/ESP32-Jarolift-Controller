@@ -29,21 +29,20 @@ void cmdLog(char param[MAX_PAR][MAX_CHAR]);
 void cmdSerial(char param[MAX_PAR][MAX_CHAR]);
 void cmdTest(char param[MAX_PAR][MAX_CHAR]);
 void cmdShutter(char param[MAX_PAR][MAX_CHAR]);
-void cmdDeviceCnt(char param[MAX_PAR][MAX_CHAR]);
 void cmdGroup(char param[MAX_PAR][MAX_CHAR]);
 
 Command commands[] = {
     {"cls", cmdCls, "Clear screen", ""},
-    {"config", cmdConfig, "config commands", "<reset>"},
+    {"config", cmdConfig, "config commands", "reset"},
     {"disconnect", cmdDisconnect, "disconnect telnet", ""},
     {"help", cmdHelp, "Displays this help message", "[command]"},
     {"info", cmdInfo, "Print system information", ""},
-    {"log", cmdLog, "logger commands", "[enable], [disable], [read], [clear], [mode], [mode <1..5>]"},
+    {"log", cmdLog, "logger commands", "enable | disable | read | clear | mode [<1..4>]"},
     {"restart", cmdRestart, "Restart the ESP", ""},
-    {"serial", cmdSerial, "serial stream output", "<stream> <[start], [stop]>"},
-    {"shutter", cmdShutter, "shutter commands", "channel, up/down/stop/shade"},
-    {"group", cmdGroup, "group commands", "group, up/down/stop/shade"},
-    {"test", cmdTest, "test commands", "group"},
+    {"serial", cmdSerial, "serial stream output", "stream <start|stop>"},
+    {"shutter", cmdShutter, "shutter commands", "<1..16> <up|down|stop|shade>"},
+    {"group", cmdGroup, "group commands", "<1..6> <up|down|stop|shade>"},
+    {"test", cmdTest, "test commands", "<crash|watchdog>"},
 };
 const int commandsCount = sizeof(commands) / sizeof(commands[0]);
 
@@ -73,9 +72,11 @@ void onTelnetReconnect(String ip) { ESP_LOGI(TAG, "Telnet: %s reconnected", ip.c
 void onTelnetConnectionAttempt(String ip) { ESP_LOGI(TAG, "Telnet: %s tried to connect", ip.c_str()); }
 
 void onTelnetInput(String str) {
+  // a blank line - or one that held nothing but spaces, which the rewritten tokenizer strips - is not a
+  // command: dispatching it would walk the whole table and answer "Unknown command" for a bare Enter
   if (!extractMessage(str, param)) {
     telnet.println("Syntax error");
-  } else {
+  } else if (param[0][0] != '\0') {
     msgAvailable = true;
   }
   telnetShell();
@@ -117,6 +118,44 @@ void cyclicTelnet() {
     dispatchCommand(param);
     msgAvailable = false;
   }
+}
+
+/**
+ * *******************************************************************
+ * @brief   parse a mandatory numeric telnet parameter and range check it
+ * @details atoi() maps every non-numeric token to 0 and cannot report a missing
+ *          parameter at all, so the handlers used to fall back to a sentinel
+ *          value that was afterwards used as an array index. Everything that is
+ *          not a plain decimal number inside [minValue, maxValue] is rejected
+ *          here, with a message that names the parameter and the valid range.
+ * @param   par       parameter string - empty when the user omitted it
+ * @param   minValue  lowest accepted value
+ * @param   maxValue  highest accepted value
+ * @param   name      parameter name, used in the error message
+ * @param   value     result, only written when the function returns true
+ * @return  true if par holds a decimal number within the given range
+ * *******************************************************************/
+static bool parseNumParam(const char *par, int minValue, int maxValue, const char *name, int *value) {
+  // CRLF because every other message in this file goes out through println(), which sends "\r\n" -
+  // after a bare LF a line-mode telnet client leaves the cursor in place and prints the prompt mid-line
+  if (par[0] == '\0') {
+    telnet.printf("missing %s - expected a number between %d and %d\r\n", name, minValue, maxValue);
+    return false;
+  }
+  char *end = nullptr;
+  long parsed = strtol(par, &end, 10);
+  // strtol() stops at the first character it cannot use - a non-empty rest means the token was not a number
+  if (end == par || *end != '\0') {
+    telnet.printf("invalid %s \"%s\" - expected a number between %d and %d\r\n", name, par, minValue, maxValue);
+    return false;
+  }
+  // compare as long: strtol() saturates to LONG_MIN/LONG_MAX on overflow, which the range check then rejects
+  if (parsed < minValue || parsed > maxValue) {
+    telnet.printf("invalid %s %ld - allowed range is %d..%d\r\n", name, parsed, minValue, maxValue);
+    return false;
+  }
+  *value = (int)parsed;
+  return true;
 }
 
 /**
@@ -163,8 +202,10 @@ void cmdLog(char param[MAX_PAR][MAX_CHAR]) {
     }
     //  log mode set
   } else if (!strcmp(param[1], "mode") && strlen(param[2]) > 0) {
-    int level = atoi(param[2]);
-    if (level > 0 && level < 5) {
+    // atoi() collapsed every non-numeric token to level 0, so "log mode debug" was reported as an
+    // out-of-range level rather than as a token that is not a number at all
+    int level = 0;
+    if (parseNumParam(param[2], 1, 4, "level", &level)) {
       config.log.level = level;
       clearLogBuffer();
       if (config.log.level == 4) {
@@ -176,8 +217,6 @@ void cmdLog(char param[MAX_PAR][MAX_CHAR]) {
       } else if (config.log.level == 1) {
         telnet.println("level set: 1=ERROR");
       }
-    } else {
-      telnet.println("invalid level - mode must be between 1 and 4");
     }
   } else {
     telnet.println("unknown parameter");
@@ -191,15 +230,15 @@ void cmdLog(char param[MAX_PAR][MAX_CHAR]) {
  * @return  none
  * *******************************************************************/
 void cmdShutter(char param[MAX_PAR][MAX_CHAR]) {
-  int channel = -1;
+  int channel = 0;
 
-  if (strlen(param[1]) > 0) {
-    channel = atoi(param[1]);
-    if (channel < 1 || channel > 16) {
-      telnet.println("invalid channel");
-      return;
-    }
+  // the range check used to sit inside "if (strlen(param[1]) > 0)", so a missing channel skipped it and left
+  // the sentinel -1 in place: jaroCmd(type, channel - 1) then handed -2, truncated to uint8_t 254, to the
+  // controller's per-channel arrays. Validate unconditionally and bail out before anything is queued.
+  if (!parseNumParam(param[1], 1, 16, "channel", &channel)) {
+    return;
   }
+
   if (!strcmp(param[2], "up")) {
     jaroCmd(CMD_UP, channel - 1);
   } else if (!strcmp(param[2], "down")) {
@@ -209,7 +248,7 @@ void cmdShutter(char param[MAX_PAR][MAX_CHAR]) {
   } else if (!strcmp(param[2], "shade")) {
     jaroCmd(CMD_SHADE, channel - 1);
   } else {
-    telnet.println("unknown command");
+    telnet.println("unknown command - use: shutter <1..16> <up|down|stop|shade>");
   }
 }
 
@@ -220,15 +259,15 @@ void cmdShutter(char param[MAX_PAR][MAX_CHAR]) {
  * @return  none
  * *******************************************************************/
 void cmdGroup(char param[MAX_PAR][MAX_CHAR]) {
-  int group = -1;
+  int group = 0;
 
-  if (strlen(param[1]) > 0) {
-    group = atoi(param[1]);
-    if (group < 1 || group > 6) {
-      telnet.println("invalid channel");
-      return;
-    }
+  // same defect as cmdShutter, and worse here: without a group number the sentinel -1 read
+  // config.jaro.grp_mask[-1], i.e. the 16 bits in front of a 6-entry array inside the config struct.
+  // The old message also said "invalid channel" for a group, which naming the parameter fixes.
+  if (!parseNumParam(param[1], 1, 6, "group", &group)) {
+    return;
   }
+
   if (!strcmp(param[2], "up")) {
     jaroCmd(CMD_GRP_UP, config.jaro.grp_mask[group - 1]);
   } else if (!strcmp(param[2], "down")) {
@@ -238,13 +277,13 @@ void cmdGroup(char param[MAX_PAR][MAX_CHAR]) {
   } else if (!strcmp(param[2], "shade")) {
     jaroCmd(CMD_GRP_SHADE, config.jaro.grp_mask[group - 1]);
   } else {
-    telnet.println("unknown command");
+    telnet.println("unknown command - use: group <1..6> <up|down|stop|shade>");
   }
 }
 
 /**
  * *******************************************************************
- * @brief   telnet command: config structure
+ * @brief   telnet command: deliberate fault injection for testing
  * @param   params received parameters
  * @return  none
  * *******************************************************************/
@@ -257,6 +296,10 @@ void cmdTest(char param[MAX_PAR][MAX_CHAR]) {
     telnet.println("watchdog test started...");
     while (1) {
     }
+  } else {
+    // these two commands intentionally kill the device, so a typo silently doing nothing is the worst
+    // possible feedback - the user cannot tell a rejected command from a test that failed to fire
+    telnet.println("unknown parameter - use: test <crash|watchdog>");
   }
 }
 
@@ -272,6 +315,9 @@ void cmdConfig(char param[MAX_PAR][MAX_CHAR]) {
     configInitValue();
     configSaveToFile();
     telnet.println("config was set to defaults");
+  } else {
+    // a mistyped "reset" produced no output at all, which on a destructive command reads exactly like success
+    telnet.println("unknown parameter - use: config reset");
   }
 }
 
@@ -355,10 +401,13 @@ void cmdRestart(char param[MAX_PAR][MAX_CHAR]) {
 void cmdSerial(char param[MAX_PAR][MAX_CHAR]) {
   if (!strcmp(param[1], "stream") && !strcmp(param[2], "start")) {
     telnetIF.serialStream = true;
-    telnet.println("serial stream active - to abort streaming, send \"x\"");
+    telnet.println("serial stream active - to stop it, send \"serial stream stop\"");
   } else if (!strcmp(param[1], "stream") && !strcmp(param[2], "stop")) {
     telnetIF.serialStream = false;
     telnet.println("serial stream disabled");
+  } else {
+    // silent on a typo, so the user could not tell whether streaming had actually been switched on
+    telnet.println("unknown parameter - use: serial stream <start|stop>");
   }
 }
 
@@ -444,31 +493,45 @@ void readLogger() {
 
 /**
  * *******************************************************************
- * @brief   check receives telnet message and extract to param array
+ * @brief   check received telnet message and extract it into the param array
+ * @details Parameters are separated by runs of spaces; leading and trailing
+ *          spaces are ignored. The previous loop copied the character that
+ *          followed a separator without re-testing it, so a line ending in a
+ *          space wrote the String's terminating '\0' into the next parameter
+ *          and advanced p past it - the loop condition then kept reading and
+ *          copying whatever uninitialised bytes happened to follow the string.
  * @param   str received message
  * @param   param char array of parameters
- * @return  none
+ * @return  true if the message fits into MAX_PAR parameters of MAX_CHAR-1 chars
  * *******************************************************************/
 bool extractMessage(String str, char param[MAX_PAR][MAX_CHAR]) {
   const char *p = str.c_str();
-  int i = 0, par = 0;
-  // initialize parameter strings
+  int par = -1;         // parameter currently being filled, -1 = no token started yet
+  int i = 0;            // write position inside that parameter
+  bool inToken = false; // false while sitting on separators
+
+  // initialize parameter strings - each slot stays terminated because its last byte is never written
   for (int j = 0; j < MAX_PAR; j++) {
     memset(&param[j], 0, sizeof(param[0]));
   }
+
   // extract answer into parameter
   while (*p != '\0') {
-    if (i >= MAX_CHAR - 1) {
-      param[par][i] = '\0';
-      return false;
-    }
-    if (*p == ' ' || i == MAX_CHAR - 1) {
-      param[par][i] = '\0';
-      par++;
+    if (*p == ' ') {
+      inToken = false; // end the current parameter and swallow any further separators
       p++;
+      continue;
+    }
+    if (!inToken) {
+      par++;
+      if (par >= MAX_PAR) {
+        return false; // more parameters than the command handlers can take
+      }
       i = 0;
-      if (par >= MAX_PAR)
-        return false;
+      inToken = true;
+    }
+    if (i >= MAX_CHAR - 1) {
+      return false; // a single parameter longer than one slot
     }
     param[par][i] = *p++;
     i++;
