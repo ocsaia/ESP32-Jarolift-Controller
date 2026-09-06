@@ -151,6 +151,22 @@ int getMinute(const char *time_value) {
 
 /**
  * *******************************************************************
+ * @brief   Convert a HH:MM time value to minutes since midnight.
+ * @param   time_value: Time value in HH:MM format.
+ * @return  Minutes since midnight, or -1 if the value is not a valid time.
+ * *******************************************************************
+ */
+int timeToMinutes(const char *time_value) {
+  int hour = getHour(time_value);
+  int minute = getMinute(time_value);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    return -1;
+  }
+  return hour * 60 + minute;
+}
+
+/**
+ * *******************************************************************
  * @brief   Check if a timer is triggered.
  * @param   timer: Timer configuration.
  * @param   currentHour: Current hour.
@@ -159,38 +175,32 @@ int getMinute(const char *time_value) {
  * *******************************************************************
  */
 bool checkTimerTrigger(const s_cfg_timer &timer, uint8_t currentHour, uint8_t currentMinute) {
+  int currentTotal = currentHour * 60 + currentMinute;
+
   if (timer.type == TYPE_FIXED_TIME) {
-    uint8_t timerHour = getHour(timer.time_value);
-    uint8_t timerMinute = getMinute(timer.time_value);
-    return (timerHour == currentHour && timerMinute == currentMinute);
+    int timerTotal = timeToMinutes(timer.time_value);
+    return (timerTotal >= 0 && timerTotal == currentTotal);
   } else if (timer.type == TYPE_SUNRISE || timer.type == TYPE_SUNDOWN) {
     uint8_t eventHour, eventMinute;
     getSunriseOrSunset(timer.type, timer.offset_value, config.geo.latitude, config.geo.longitude, eventHour, eventMinute);
 
-    // Check min/max time ranges:
-    if (timer.use_min_time) {
-      uint8_t minHour = getHour(timer.min_time_value);
-      uint8_t minMinute = getMinute(timer.min_time_value);
-      if (minHour >= 0) {
-        eventHour = max(eventHour, minHour);
-      }
-      if (eventHour == minHour) {
-        eventMinute = max(eventMinute, minMinute);
-      }
+    // Clamp on minutes since midnight. Clamping the hour and the minute
+    // independently moved the event to a time that was neither the astro event
+    // nor the limit: sunrise 05:30 with a 07:15 minimum produced 07:30, and
+    // sunset 21:40 with a 20:50 maximum produced 20:40.
+    int eventTotal = eventHour * 60 + eventMinute;
+
+    int minTotal = timer.use_min_time ? timeToMinutes(timer.min_time_value) : -1;
+    if (minTotal >= 0 && eventTotal < minTotal) {
+      eventTotal = minTotal;
     }
 
-    if (timer.use_max_time) {
-      uint8_t maxHour = getHour(timer.max_time_value);
-      uint8_t maxMinute = getMinute(timer.max_time_value);
-      if (maxHour >= 0) {
-        eventHour = min(eventHour, maxHour);
-      }
-      if (eventHour == maxHour) {
-        eventMinute = min(eventMinute, maxMinute);
-      }
+    int maxTotal = timer.use_max_time ? timeToMinutes(timer.max_time_value) : -1;
+    if (maxTotal >= 0 && eventTotal > maxTotal) {
+      eventTotal = maxTotal;
     }
 
-    return (eventHour == currentHour && eventMinute == currentMinute);
+    return (eventTotal == currentTotal);
   }
   return false;
 }
