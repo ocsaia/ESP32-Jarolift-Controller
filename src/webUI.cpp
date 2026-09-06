@@ -1,6 +1,7 @@
 #include <LittleFS.h>
 #include <Update.h>
 #include <basics.h>
+#include <cmdQueue.h>
 #include <language.h>
 #include <message.h>
 #include <webUI.h>
@@ -8,9 +9,6 @@
 
 const int MAX_WS_CLIENT = 3;
 const int CHUNK_SIZE = 1024;
-
-/* P R O T O T Y P E S ********************************************************/
-void webCallback(const char *elementId, const char *value);
 
 /* D E C L A R A T I O N S ****************************************************/
 static muTimer heartbeatTimer = muTimer(); // timer to refresh other values
@@ -21,11 +19,13 @@ EspWebUI webUI(80);
 static const char *TAG = "WEB"; // LOG TAG
 static bool webInitDone = false;
 static const size_t BUFFER_SIZE = 512;
-static bool onLoadRequest = false;
 
-static char webCallbackElementID[32];
-static char webCallbackValue[256];
-static bool webCallbackAvailable = false;
+// Set by the AsyncTCP task, read and cleared by loop() - volatile so the
+// compiler cannot keep it in a register across the cyclic check. It stays a
+// latch rather than a queue entry on purpose: repeated reload requests have to
+// collapse into a single updateAllElements(), which is what a latch does and a
+// queue does not.
+static volatile bool onLoadRequest = false;
 
 static auto &wdt = EspSysUtil::Wdt::getInstance();
 static auto &ota = EspSysUtil::OTA::getInstance();
@@ -79,15 +79,15 @@ void webUISetup() {
     }
   });
 
-  // callback for reload
+  // callback for reload - the AsyncTCP task only sets the latch, loop() acts on it
   webUI.setCallbackReload([]() { onLoadRequest = true; });
 
-  // callback for web elements - copy elementID and value and call webCallback in cyclic loop
-  webUI.setCallbackWebElement([](const char *elementID, const char *elementValue) {
-    snprintf(webCallbackElementID, sizeof(webCallbackElementID), "%s", elementID);
-    snprintf(webCallbackValue, sizeof(webCallbackValue), "%s", elementValue);
-    webCallbackAvailable = true;
-  });
+  // callback for web elements - runs in the AsyncTCP task, so the event is only
+  // copied into the cross-task command queue here and dispatched later by
+  // cmdQueueCyclic(). cmdQueuePushWebElement() is NULL safe: EspWebUI passes the
+  // parsed JSON members straight through and both are NULL when a client omits
+  // them, which used to reach snprintf("%s", NULL).
+  webUI.setCallbackWebElement([](const char *elementID, const char *elementValue) { cmdQueuePushWebElement(elementID, elementValue); });
 
   webUI.setCredentials(config.auth.user, config.auth.password);
   webUI.setAuthentication(config.auth.enable);
@@ -115,11 +115,9 @@ void webUICyclic() {
   // handling of update webUI elements
   webUIupdates();
 
-  // handling of callback infomation
-  if (webCallbackAvailable) {
-    webCallback(webCallbackElementID, webCallbackValue);
-    webCallbackAvailable = false;
-  }
+  // web element callbacks are dispatched by cmdQueueCyclic() in loop() - this
+  // block handled exactly one event per iteration, which is what lost all but
+  // the last field of a settings form sent as a single burst
 
   webInitDone = true; // init done
 }

@@ -1,6 +1,7 @@
 // includes
 #include <ArduinoOTA.h>
 #include <basics.h>
+#include <cmdQueue.h>
 #include <config.h>
 #include <jarolift.h>
 #include <message.h>
@@ -32,6 +33,11 @@ void setup() {
 
   // Message Service Setup (before use of MY_LOGx)
   messageSetup();
+
+  // cross-task command queue - must exist before any producer is armed, i.e.
+  // before webUISetup() registers the element callback and before mqttSetup()
+  // subscribes
+  cmdQueueSetup();
 
   // check for double reset
   mrd = new EspSysUtil::MRD32(MRD_TIMEOUT, MRD_RETRIES);
@@ -106,6 +112,9 @@ void loop() {
 
   // webUI Cyclic
   webUICyclic();
+
+  // dispatch the commands the AsyncTCP task queued (mqtt + webUI elements)
+  cmdQueueCyclic();
 
   // Message Service
   messageCyclic();

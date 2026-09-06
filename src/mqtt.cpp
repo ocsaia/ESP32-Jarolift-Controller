@@ -1,24 +1,13 @@
 #include <WiFi.h>
 #include <basics.h>
+#include <cmdQueue.h>
 #include <jarolift.h>
 #include <language.h>
 #include <message.h>
 #include <mqtt.h>
 #include <mqttDiscovery.h>
-#include <queue>
-
-#define MAX_MQTT_CMD 20
 
 /* D E C L A R A T I O N S ****************************************************/
-#define PAYLOAD_LEN 512
-struct s_MqttMessage {
-  char topic[512];
-  char payload[PAYLOAD_LEN];
-  int len;
-};
-
-std::queue<s_MqttMessage> mqttCmdQueue;
-static void processMqttMessage();
 static AsyncMqttClient mqtt_client;
 static bool bootUpMsgDone, setupDone = false;
 static const char *TAG = "MQTT"; // LOG TAG
@@ -29,30 +18,6 @@ static volatile unsigned long mqttRetryDelay = MQTT_RECONNECT;
 static volatile bool mqttFirstAttempt = true;
 static unsigned long mqttAttemptMs = 0;
 static muTimer mqttReconnectTimer;
-
-/**
- * *******************************************************************
- * @brief   add message to mqtt command buffer
- * @param   topic, payload, len
- * @return  none
- * *******************************************************************/
-void addMqttCmd(const char *topic, const char *payload, int len) {
-  if (mqttCmdQueue.size() < MAX_MQTT_CMD) {
-    s_MqttMessage message;
-    strncpy(message.topic, topic, sizeof(message.topic) - 1);
-    message.topic[sizeof(message.topic) - 1] = '\0';
-
-    strncpy(message.payload, payload, sizeof(message.payload) - 1);
-    message.payload[sizeof(message.payload) - 1] = '\0';
-
-    message.len = len;
-
-    mqttCmdQueue.push(message);
-    ESP_LOGD(TAG, "add msg to buffer: %s, %s", topic, payload);
-  } else {
-    ESP_LOGE(TAG, "too many commands within too short time");
-  }
-}
 
 /**
  * *******************************************************************
@@ -89,31 +54,32 @@ const char *addCfgCmdTopic(const char *suffix) {
 /**
  * *******************************************************************
  * @brief   MQTT callback function for incoming message
- * @param   topic, payload
+ * @details Runs in the AsyncTCP task, so it may only hand the message over: no
+ *          local message buffer, no dispatch, and no logging - every ESP_LOGx
+ *          line goes through custom_vprintf(), which writes the shared logData
+ *          ring and the telnet stream from the wrong task. Refused messages are
+ *          counted here and reported by cmdQueueCyclic() in loop().
+ * @param   topic, payload, properties, len, index, total
  * @return  none
  * *******************************************************************/
 void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total) {
 
-  s_MqttMessage msgCpy;
-
-  msgCpy.len = len;
-
-  if (topic == NULL) {
-    msgCpy.topic[0] = '\0';
-  } else {
-    strncpy(msgCpy.topic, topic, sizeof(msgCpy.topic) - 1);
-    msgCpy.topic[sizeof(msgCpy.topic) - 1] = '\0';
-  }
-  if (payload == NULL) {
-    msgCpy.payload[0] = '\0';
-  } else if (len > 0 && len < PAYLOAD_LEN) {
-    memcpy(msgCpy.payload, payload, len);
-    msgCpy.payload[len] = '\0';
+  // AsyncMqttClient delivers a payload that spans several TCP segments in
+  // chunks and calls back once per chunk, so every chunk used to be queued as
+  // its own command with the same topic. Every command this firmware knows is a
+  // short word, so a chunk is never a valid command: drop it instead of acting
+  // on an arbitrary slice, and do not build a reassembly buffer in the AsyncTCP
+  // task for it. A zero length payload - the normal way to clear a retained
+  // topic - arrives as len == index == total == 0 and still passes here.
+  if (index != 0 || len != total) {
+    cmdQueueCountDrop("fragmented mqtt message");
+    return;
   }
 
-  addMqttCmd(msgCpy.topic, msgCpy.payload, msgCpy.len);
-
-  ESP_LOGI(TAG, "msg received | topic: %s | payload: %s", msgCpy.topic, msgCpy.payload);
+  // payload is NULL for a zero length message and is not NUL terminated
+  // otherwise - cmdQueuePushMqtt() copies exactly len bytes into a
+  // zero-initialised slot and terminates the copy itself
+  cmdQueuePushMqtt(topic, payload, len);
 }
 
 /**
@@ -208,10 +174,8 @@ void mqttSetup() {
  * *******************************************************************/
 void mqttCyclic() {
 
-  // process incoming messages
-  if (!mqttCmdQueue.empty()) {
-    processMqttMessage();
-  }
+  // incoming messages are dispatched by cmdQueueCyclic() in loop(), so that one
+  // queue and one drain point serve both the mqtt and the webUI producer
 
   // call setup when connection is established
   if (config.mqtt.enable && !setupMode && !setupDone && (eth.connected || wifi.connected)) {
@@ -331,63 +295,60 @@ uint16_t parseMask(const char *payload) {
 
 /**
  * *******************************************************************
- * @brief   MQTT callback function for incoming message
+ * @brief   act on one mqtt command taken from the cross-task queue
+ * @details called from cmdQueueCyclic() in loop(); topic and payload are
+ *          NUL-terminated copies owned by the caller and valid for the duration
+ *          of the call only
  * @param   topic, payload
  * @return  none
  * *******************************************************************/
-void processMqttMessage() {
+void mqttHandleCommand(const char *topic, const char *payload) {
 
-  s_MqttMessage msgCpy = mqttCmdQueue.front();
+  // logged here rather than in onMqttMessage(), which runs in the AsyncTCP task
+  ESP_LOGI(TAG, "msg received | topic: %s | payload: %s", topic, payload);
 
-  ESP_LOGD(TAG, "process msg from buffer: %s, %s", msgCpy.topic, msgCpy.payload);
-
-  // payload as number
-  // msgCpy.intVal = 0;
-  // msgCpy.floatVal = 0.0;
-  // if (len > 0) {
-  //   msgCpy.intVal = atoi(msgCpy.payload);
-  //   msgCpy.floatVal = atoff(msgCpy.payload);
-  // }
-
+  // addTopic() returns the same static buffer on every call, so shutterTopic
+  // and groupTopic alias - this is only correct because checkJaroCmd() consumes
+  // the first one before the second call. Do not reorder these four lines.
   const char *shutterTopic = addTopic("/cmd/shutter/");
-  int channel = checkJaroCmd(msgCpy.topic, shutterTopic, 16);
+  int channel = checkJaroCmd(topic, shutterTopic, 16);
   const char *groupTopic = addTopic("/cmd/group/");
-  int group = checkJaroCmd(msgCpy.topic, groupTopic, 6);
+  int group = checkJaroCmd(topic, groupTopic, 6);
 
   ESP_LOGD(TAG, "channel: %i", channel);
   ESP_LOGD(TAG, "group: %i", group);
 
   // restart ESP command
-  if (strcasecmp(msgCpy.topic, addTopic("/cmd/restart")) == 0) {
+  if (strcasecmp(topic, addTopic("/cmd/restart")) == 0) {
     EspSysUtil::RestartReason::saveLocal("mqtt command");
     yield();
     delay(1000);
     yield();
     ESP.restart();
     // reconfigure
-  } else if (strcasecmp(msgCpy.topic, addTopic("/cmd/reconfigure")) == 0) {
+  } else if (strcasecmp(topic, addTopic("/cmd/reconfigure")) == 0) {
     mqttDiscoverySetup(true);
     yield();
     delay(1000);
     yield();
     mqttDiscoverySetup(false);
     // homeassistant/status
-  } else if (strcmp(msgCpy.topic, "homeassistant/status") == 0) {
-    if (config.mqtt.ha_enable && strcmp(msgCpy.payload, "online") == 0) {
+  } else if (strcmp(topic, "homeassistant/status") == 0) {
+    if (config.mqtt.ha_enable && strcmp(payload, "online") == 0) {
       mqttDiscoverySetup(false); // send actual discovery configuration
     }
     // Shutter commands
   } else if (channel != -1) {
     if (channel >= 1 && channel <= 16) {
-      if (strcasecmp(msgCpy.payload, "UP") == 0 || strcasecmp(msgCpy.payload, "OPEN") == 0 || strcmp(msgCpy.payload, "0") == 0) {
+      if (strcasecmp(payload, "UP") == 0 || strcasecmp(payload, "OPEN") == 0 || strcmp(payload, "0") == 0) {
         jaroCmd(CMD_UP, channel - 1);
-      } else if (strcasecmp(msgCpy.payload, "DOWN") == 0 || strcasecmp(msgCpy.payload, "CLOSE") == 0 || strcmp(msgCpy.payload, "1") == 0) {
+      } else if (strcasecmp(payload, "DOWN") == 0 || strcasecmp(payload, "CLOSE") == 0 || strcmp(payload, "1") == 0) {
         jaroCmd(CMD_DOWN, channel - 1);
-      } else if (strcasecmp(msgCpy.payload, "STOP") == 0 || strcmp(msgCpy.payload, "2") == 0) {
+      } else if (strcasecmp(payload, "STOP") == 0 || strcmp(payload, "2") == 0) {
         jaroCmd(CMD_STOP, channel - 1);
-      } else if (strcasecmp(msgCpy.payload, "SHADE") == 0 || strcmp(msgCpy.payload, "3") == 0) {
+      } else if (strcasecmp(payload, "SHADE") == 0 || strcmp(payload, "3") == 0) {
         jaroCmd(CMD_SHADE, channel - 1);
-      } else if (strcasecmp(msgCpy.payload, "SETSHADE") == 0 || strcmp(msgCpy.payload, "4") == 0) {
+      } else if (strcasecmp(payload, "SETSHADE") == 0 || strcmp(payload, "4") == 0) {
         jaroCmd(CMD_SET_SHADE, channel - 1);
       } else {
         mqttPublish(addTopic("/message"), "invalid shutter cmd", false);
@@ -400,13 +361,13 @@ void processMqttMessage() {
     // Group commands
   } else if (group != -1) {
     if (group >= 1 && group <= 6) {
-      if (strcasecmp(msgCpy.payload, "UP") == 0 || strcasecmp(msgCpy.payload, "OPEN") == 0 || strcmp(msgCpy.payload, "0") == 0) {
+      if (strcasecmp(payload, "UP") == 0 || strcasecmp(payload, "OPEN") == 0 || strcmp(payload, "0") == 0) {
         jaroCmd(CMD_GRP_UP, config.jaro.grp_mask[group - 1]);
-      } else if (strcasecmp(msgCpy.payload, "DOWN") == 0 || strcasecmp(msgCpy.payload, "CLOSE") == 0 || strcmp(msgCpy.payload, "1") == 0) {
+      } else if (strcasecmp(payload, "DOWN") == 0 || strcasecmp(payload, "CLOSE") == 0 || strcmp(payload, "1") == 0) {
         jaroCmd(CMD_GRP_DOWN, config.jaro.grp_mask[group - 1]);
-      } else if (strcasecmp(msgCpy.payload, "STOP") == 0 || strcmp(msgCpy.payload, "2") == 0) {
+      } else if (strcasecmp(payload, "STOP") == 0 || strcmp(payload, "2") == 0) {
         jaroCmd(CMD_GRP_STOP, config.jaro.grp_mask[group - 1]);
-      } else if (strcasecmp(msgCpy.payload, "SHADE") == 0 || strcmp(msgCpy.payload, "3") == 0) {
+      } else if (strcasecmp(payload, "SHADE") == 0 || strcmp(payload, "3") == 0) {
         jaroCmd(CMD_GRP_SHADE, config.jaro.grp_mask[group - 1]);
       } else {
         mqttPublish(addTopic("/message"), "invalid group cmd", false);
@@ -417,18 +378,16 @@ void processMqttMessage() {
       ESP_LOGW(TAG, "invalid channel for group cmd");
     }
     // Group commands with bitmask
-  } else if (strcasecmp(msgCpy.topic, addTopic("/cmd/group/up")) == 0) {
-    jaroCmd(CMD_GRP_UP, parseMask(msgCpy.payload));
-  } else if (strcasecmp(msgCpy.topic, addTopic("/cmd/group/down")) == 0) {
-    jaroCmd(CMD_GRP_DOWN, parseMask(msgCpy.payload));
-  } else if (strcasecmp(msgCpy.topic, addTopic("/cmd/group/stop")) == 0) {
-    jaroCmd(CMD_GRP_STOP, parseMask(msgCpy.payload));
-  } else if (strcasecmp(msgCpy.topic, addTopic("/cmd/group/shade")) == 0) {
-    jaroCmd(CMD_GRP_SHADE, parseMask(msgCpy.payload));
+  } else if (strcasecmp(topic, addTopic("/cmd/group/up")) == 0) {
+    jaroCmd(CMD_GRP_UP, parseMask(payload));
+  } else if (strcasecmp(topic, addTopic("/cmd/group/down")) == 0) {
+    jaroCmd(CMD_GRP_DOWN, parseMask(payload));
+  } else if (strcasecmp(topic, addTopic("/cmd/group/stop")) == 0) {
+    jaroCmd(CMD_GRP_STOP, parseMask(payload));
+  } else if (strcasecmp(topic, addTopic("/cmd/group/shade")) == 0) {
+    jaroCmd(CMD_GRP_SHADE, parseMask(payload));
   } else {
     mqttPublish(addTopic("/message"), "unknown topic", false);
     ESP_LOGI(TAG, "unknown topic received");
   }
-
-  mqttCmdQueue.pop(); // next entry in Queue
 }

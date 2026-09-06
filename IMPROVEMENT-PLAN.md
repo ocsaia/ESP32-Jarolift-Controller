@@ -31,17 +31,23 @@ The two `chore/` branches are the shared base for the rest: nothing builds
 without E1, and E3 stops development builds from destroying the committed
 release artifacts.
 
-Phase 1b landed: **A1, B1, B2, B3, B5, D1-D7, F3, F5** plus the Minor list, on
+Phase 1b landed: **A1, A2, A3, B1-B5, D1-D7, F3, F5** plus the Minor list, on
 these branches - `fix/telnet-command-validation`, `fix/webui-cleanups`,
 `fix/minor-correctness`, `fix/radio-hardening`, `fix/network-resilience`,
-`feat/small-features`, `fix/ha-discovery`. Every one builds warning-free for
+`feat/small-features`, `fix/ha-discovery`, `fix/cross-task-command-queue`. Every one builds warning-free for
 esp32; the 16 MB target builds too.
+
+`fix/cross-task-command-queue` (A2, A3, B4) carries a caveat the others do
+not: its three adversarial reviewers were lost to a spend limit and the retries
+were cancelled to stay inside it, so it was reviewed by hand instead - one pair
+of eyes rather than four. The commit message lists exactly what was and was not
+verified. It is the change to re-review first if anything on this branch
+misbehaves.
 
 ### Still open, and why
 
 | Item | Why it did not land |
 |------|---------------------|
-| **A2, A3, B4** (`queue`) | The cross-task queue rework is specified but got **no adversarial review** - all three reviewers were lost to a spend limit. It is the riskiest change in the project (it replaces the unsynchronised std::queue shared by AsyncTCP and loop(), and the single-slot WebUI callback, across new files). Not applied on one unreviewed opinion. |
 | **B6** | Refuted. Dropping `optimistic:true` assumes the firmware reports real state, but `mqttSendPosition()` runs right after a blind transmit with no receiver acknowledgement. It would add latency and no accuracy. |
 | **B7** | Refuted as designed. Retaining the birth message treats it as once-per-connect, but `messageCyclic()` publishes it every 10 s. Retaining discovery configs also removes the self-expiry that currently cleans up entities for disabled channels. A correct version needs a separate `mqttPublishBirth()` and an explicit clear path. |
 | **D6** (mqttDiscovery half) | Still worth doing - unbounded `sprintf` into 256-byte topic buffers and a silent `jsonString[1024]` truncation that makes an entity vanish. It arrived entangled with the B6 rework and needs redesigning alone. The `jarolift.cpp` half is done (`MQTT_TOPIC_BUF_LEN`). |
