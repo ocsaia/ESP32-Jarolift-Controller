@@ -12,6 +12,17 @@ MERGED_BIN = "$BUILD_DIR/${PROGNAME}_merged.bin"
 RELEASE_PATH = "$PROJECT_DIR/release"
 BOARD_CONFIG = env.BoardConfig()
 
+# Copying into release/ is opt-in.
+#
+# Those binaries are committed to the repository - the release workflow uploads
+# ./release/* as-is and never builds - and the cleanup below removes the whole
+# folder when the esp32 environment is built. A single-target build therefore
+# used to silently delete the artifacts belonging to every other target.
+#
+# Set JAROLIFT_RELEASE=1 to produce actual release binaries, and build all
+# targets in one run so the folder is repopulated completely.
+RELEASE_BUILD = os.environ.get("JAROLIFT_RELEASE") == "1"
+
 
 # extract program version from /include/config.h
 def extract_version():
@@ -46,6 +57,9 @@ def merge_bin(source, target, env):
         )
     )                                                                                                                                                                                                                                                                                                                                                                                                                                                       
         
+    if not RELEASE_BUILD:
+        return
+
     release_path = env.subst(RELEASE_PATH) # path to release folder
     # delete old release files
     if env.get("PIOENV") == "esp32":
