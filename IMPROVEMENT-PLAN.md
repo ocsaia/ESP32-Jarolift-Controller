@@ -31,10 +31,11 @@ The two `chore/` branches are the shared base for the rest: nothing builds
 without E1, and E3 stops development builds from destroying the committed
 release artifacts.
 
-Phase 1b landed: **A1, A2, A3, B1-B5, D1-D7, F3, F5** plus the Minor list, on
+Phase 1b landed: **A1, A2, A3, B1-B5, B7, D1-D7, F3, F5** plus the Minor list, on
 these branches - `fix/telnet-command-validation`, `fix/webui-cleanups`,
 `fix/minor-correctness`, `fix/radio-hardening`, `fix/network-resilience`,
-`feat/small-features`, `fix/ha-discovery`, `fix/cross-task-command-queue`. Every one builds warning-free for
+`feat/small-features`, `fix/ha-discovery`, `fix/cross-task-command-queue`, `fix/mqtt-robustness`,
+`fix/ha-retained-discovery`. Every one builds warning-free for
 esp32; the 16 MB target builds too.
 
 `fix/cross-task-command-queue` (A2, A3, B4) carries a caveat the others do
@@ -49,7 +50,6 @@ misbehaves.
 | Item | Why it did not land |
 |------|---------------------|
 | **B6** | Refuted. Dropping `optimistic:true` assumes the firmware reports real state, but `mqttSendPosition()` runs right after a blind transmit with no receiver acknowledgement. It would add latency and no accuracy. |
-| **B7** | Refuted as designed. Retaining the birth message treats it as once-per-connect, but `messageCyclic()` publishes it every 10 s. Retaining discovery configs also removes the self-expiry that currently cleans up entities for disabled channels. A correct version needs a separate `mqttPublishBirth()` and an explicit clear path. |
 | **F4** | Deliberately dropped. `EspWebUI::sendWs()` allocates the whole dump through `ws.makeBuffer()`, whose `std::make_shared<std::vector>` aborts rather than returning null with exceptions disabled - so raising the ring from 200 to 320 trades log history against a panic reboot. Chunking needs a new WebSocket command on both sides plus a regeneration of `include/gzip_*.h`. |
 
 ### New findings from review, not yet fixed

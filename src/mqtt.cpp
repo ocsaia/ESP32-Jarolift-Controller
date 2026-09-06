@@ -18,6 +18,8 @@ static volatile unsigned long mqttRetryDelay = MQTT_RECONNECT;
 static volatile bool mqttFirstAttempt = true;
 static unsigned long mqttAttemptMs = 0;
 static muTimer mqttReconnectTimer;
+// Availability topic. Static duration because setWill() keeps the pointer.
+static char mqttStatusTopic[sizeof(config.mqtt.topic) + 16] = {0};
 
 /**
  * *******************************************************************
@@ -91,6 +93,17 @@ void onMqttMessage(char *topic, char *payload, AsyncMqttClientMessageProperties 
 void onMqttConnect(bool sessionPresent) {
   mqttRetryDelay = MQTT_RECONNECT; // a successful connect resets the backoff
   ESP_LOGI(TAG, "MQTT connected");
+
+  // Birth message, retained so it survives a Home Assistant restart, and
+  // published exactly once per connection - it is the counterpart of the
+  // retained last will registered in mqttSetup(). It used to ride along in
+  // sendWiFiInfo(), which messageCyclic() calls every ten seconds, so the
+  // broker's retained store was rewritten thousands of times a day for a value
+  // that only ever changes on connect and on disconnect.
+  if (mqttStatusTopic[0] != 0) {
+    mqttPublish(mqttStatusTopic, "online", true);
+  }
+
   // Once connected, publish an announcement...
   sendWiFiInfo();
   // ... and resubscribe
@@ -164,11 +177,11 @@ void mqttSetup() {
   // caller overwrites. The last will was therefore registered on whatever topic
   // happened to be in that buffer when the CONNECT packet went out, so a device
   // that dropped off the network never went "offline" where Home Assistant was
-  // listening. Give the will topic storage of its own, with static duration
-  // because the client keeps using it for the lifetime of the connection.
-  static char willTopic[sizeof(config.mqtt.topic) + 16];
-  snprintf(willTopic, sizeof(willTopic), "%s/status", config.mqtt.topic);
-  mqtt_client.setWill(willTopic, 0, true, "offline");
+  // listening. The availability topic now has storage of its own, which the
+  // client keeps referencing for the lifetime of the connection - and using the
+  // same buffer for the birth message guarantees the two cannot disagree.
+  snprintf(mqttStatusTopic, sizeof(mqttStatusTopic), "%s/status", config.mqtt.topic);
+  mqtt_client.setWill(mqttStatusTopic, 0, true, "offline");
   mqtt_client.setKeepAlive(10);
   mqtt_client.connected();
 

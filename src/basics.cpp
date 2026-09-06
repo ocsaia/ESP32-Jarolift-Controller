@@ -362,8 +362,9 @@ void sendWiFiInfo() {
   serializeJson(wifiJSON, sendWififJSON);
   mqttPublish(addTopic("/wifi"), sendWififJSON, false);
 
-  // wifi status
-  mqttPublish(addTopic("/status"), "online", false);
+  // No availability publish here: this runs every ten seconds from
+  // messageCyclic(), and the retained birth message belongs once per connection
+  // in onMqttConnect(), opposite the retained last will.
 }
 
 /**
@@ -388,7 +389,7 @@ void sendETHInfo() {
   serializeJson(ethJSON, sendEthJSON);
   mqttPublish(addTopic("/eth"), sendEthJSON, false);
 
-  mqttPublish(addTopic("/status"), "online", false);
+  // see the note in sendWiFiInfo() - availability is published on connect only
 }
 
 /**
