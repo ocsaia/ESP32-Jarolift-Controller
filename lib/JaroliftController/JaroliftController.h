@@ -78,6 +78,13 @@ private:
   Config config_;
   uint16_t devCount_;
 
+  // D4: the NVS handle is opened once and kept, and the counter is mirrored in
+  // RAM. It used to be opened and closed on every single access, plus a
+  // delay(100) per write - about 800 ms of pure waiting inside cmdUnlearn().
+  nvs_handle_t nvsHandle_;
+  bool nvsOpen_;
+  bool devCountValid_;
+
   // 32 bit KeeLoq device keys. Keeloq::decrypt() produces them as unsigned long
   // and Keeloq() consumes them as unsigned long again; holding them in a signed
   // int made every key with bit 31 set depend on implementation-defined
@@ -97,9 +104,24 @@ private:
 
   // Empfangspuffer
   static constexpr size_t kPulseBufferSize = 216;
-  volatile unsigned int lowBuf_[kPulseBufferSize];
-  volatile unsigned int hiBuf_[kPulseBufferSize];
+  // Every value that is stored here is range-checked to less than 4300 µs first,
+  // so uint16_t holds all of them. Halving the two buffers pays for the frame
+  // snapshot below twice over and halves the time the copy masks interrupts.
+  volatile uint16_t lowBuf_[kPulseBufferSize];
+  volatile uint16_t hiBuf_[kPulseBufferSize];
   volatile unsigned int pbWrite_;
+  volatile uint32_t rxOverflow_; // A1: bursts dropped because they filled the buffer
+
+  // Spinlock protecting lowBuf_/hiBuf_/pbWrite_/rxOverflow_ against the RX ISR.
+  // The ISR can run on the other core, so masking interrupts alone would not do.
+  portMUX_TYPE rxMux_ = portMUX_INITIALIZER_UNLOCKED;
+
+  // Snapshot of one frame, taken under rxMux_ so decoding never races the ISR.
+  // 76 covers the longest accepted frame (pbWrite_ <= 75); decoding reads up to
+  // index 72. Kept as members, not locals, to leave the loop() stack untouched.
+  static constexpr size_t kFrameSnapshotSize = 76;
+  uint16_t snapLow_[kFrameSnapshotSize];
+  uint16_t snapHi_[kFrameSnapshotSize];
 
   // Empfangsdaten
   uint32_t rxSerial_;
@@ -109,8 +131,19 @@ private:
 
   // Laufzeitzustand
   bool initOK_;
-  unsigned int steadyCount_;
   bool rxDataReady_;
+  bool rxIrqAttached_; // D3: TX detaches the RX ISR, so attach/detach must stay symmetric
+  int rxIrqPin_;       // pin the ISR is attached to - a re-init may change gpio_.gdo2
+
+  // SHADE detection (D1): a remote sends SHADE as a long press on STOP, which
+  // arrives as a run of STOP frames from one remote for one set of channels.
+  uint32_t stopRunSerial_;
+  uint16_t stopRunChannel_;
+  uint8_t stopRunCount_;
+  bool stopRunReported_;
+  unsigned long stopRunLastMs_;
+
+  unsigned long overflowLogMs_; // rate limit for the A1 overrun warning
 
   // Hardware-Modul
   CC1101 cc1101_;
@@ -125,6 +158,18 @@ private:
   static constexpr uint8_t FCT_CODE_DOWN = 0x2;
   static constexpr uint8_t FCT_CODE_STOP = 0x4;
   static constexpr uint8_t FCT_CODE_UPDOWN = 0xA;
+  static constexpr uint8_t FCT_CODE_SHADE = 0x3; // never sent over the air - derived from a long STOP press
+
+  // B3: discLowArr_/discHighArr_ have one entry per channel, and every public
+  // command takes a uint8_t channel that ends up as an index into them.
+  static constexpr uint8_t kMaxChannels = 16;
+
+  // D1: consecutive STOP frames that count as a long press. The original fired at
+  // "steadyCount_ > 10" and loop() needs ~250 ms to recover per decoded frame, so
+  // this is roughly three seconds of holding the button.
+  static constexpr uint8_t kShadeStopFrames = 11;
+  // A pause longer than this ends the run: two separate STOP presses must not add up.
+  static constexpr unsigned long kShadeRunGapMs = 1500;
 
   static constexpr char *TAG = "JARO-LIB"; // LOG TAG
 
@@ -134,10 +179,14 @@ private:
 
   // Hilfsfunktionen
   void updateDeviceCounter(bool increment);
+  bool openNvs();
+  bool channelValid(uint8_t channel, const char *cmdName) const;
 
   void radioTxFrame(int length);
   void radioTxGroupH();
   void radioTx(int repetitions);
+  void attachRxInterrupt();
+  void detachRxInterrupt();
   void enterRx();
   void enterTx();
   void processRxData();
