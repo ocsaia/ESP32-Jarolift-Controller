@@ -83,7 +83,7 @@ void executeCommand(const s_cfg_timer &timer, uint8_t number) {
  * @return  true if the event exists on the current day, false otherwise
  * *******************************************************************
  */
-bool getSunriseOrSunset(uint8_t type, int16_t offset, float latitude, float longitude, uint8_t &hour, uint8_t &minute) {
+bool getSunriseOrSunset(time_t now, uint8_t type, int16_t offset, float latitude, float longitude, uint8_t &hour, uint8_t &minute) {
 
   // Latched per event type: timerCyclic() calls this for every enabled astro
   // timer on each minute change and the WebUI adds two more calls per refresh,
@@ -97,9 +97,7 @@ bool getSunriseOrSunset(uint8_t type, int16_t offset, float latitude, float long
   // an unbounded config field, so the sum must be wider than the day it is
   // reduced into.
   int eventMinutes;
-  time_t now;
   tm dti, utcTime;
-  time(&now);
   localtime_r(&now, &dti);  // local Time
   gmtime_r(&now, &utcTime); // UTC Time
 
@@ -216,7 +214,7 @@ int timeToMinutes(const char *time_value) {
  * @return  true if the timer is triggered, false otherwise.
  * *******************************************************************
  */
-bool checkTimerTrigger(const s_cfg_timer &timer, uint8_t currentHour, uint8_t currentMinute) {
+bool checkTimerTrigger(const s_cfg_timer &timer, time_t now, uint8_t currentHour, uint8_t currentMinute) {
   int currentTotal = currentHour * 60 + currentMinute;
 
   if (timer.type == TYPE_FIXED_TIME) {
@@ -230,7 +228,7 @@ bool checkTimerTrigger(const s_cfg_timer &timer, uint8_t currentHour, uint8_t cu
     // window is deliberately not used as a fallback - it bounds an event, it
     // does not define one, so firing at the limit would invent a schedule the
     // user never configured.
-    if (!getSunriseOrSunset(timer.type, timer.offset_value, config.geo.latitude, config.geo.longitude, eventHour, eventMinute)) {
+    if (!getSunriseOrSunset(now, timer.type, timer.offset_value, config.geo.latitude, config.geo.longitude, eventHour, eventMinute)) {
       return false;
     }
 
@@ -284,7 +282,7 @@ void timerCyclic() {
         // check if day is enabled
         if (isDayEnabled(config.timer[i], dti.tm_wday)) {
           // check if timer is triggered
-          if (checkTimerTrigger(config.timer[i], dti.tm_hour, dti.tm_min)) {
+          if (checkTimerTrigger(config.timer[i], now, dti.tm_hour, dti.tm_min)) {
             executeCommand(config.timer[i], i);
           }
         }

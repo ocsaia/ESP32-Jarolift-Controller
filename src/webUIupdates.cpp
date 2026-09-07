@@ -233,7 +233,7 @@ void updateSystemInfoElementsStatic() {
   // only visible sign that an astro timer will stay idle today, so it must not
   // show a plausible-looking time.
   uint8_t sunriseHour, sunriseMinute;
-  if (getSunriseOrSunset(TYPE_SUNRISE, 0, config.geo.latitude, config.geo.longitude, sunriseHour, sunriseMinute)) {
+  if (getSunriseOrSunset(time(NULL), TYPE_SUNRISE, 0, config.geo.latitude, config.geo.longitude, sunriseHour, sunriseMinute)) {
     snprintf(tmpMessage, sizeof(tmpMessage), "%02d:%02d", sunriseHour, sunriseMinute);
   } else {
     snprintf(tmpMessage, sizeof(tmpMessage), "--:--");
@@ -241,7 +241,7 @@ void updateSystemInfoElementsStatic() {
   webUI.addJson(jsonDoc, "p09_sunrise", tmpMessage);
 
   uint8_t sundownHour, sundownMinute;
-  if (getSunriseOrSunset(TYPE_SUNDOWN, 0, config.geo.latitude, config.geo.longitude, sundownHour, sundownMinute)) {
+  if (getSunriseOrSunset(time(NULL), TYPE_SUNDOWN, 0, config.geo.latitude, config.geo.longitude, sundownHour, sundownMinute)) {
     snprintf(tmpMessage, sizeof(tmpMessage), "%02d:%02d", sundownHour, sundownMinute);
   } else {
     snprintf(tmpMessage, sizeof(tmpMessage), "--:--");

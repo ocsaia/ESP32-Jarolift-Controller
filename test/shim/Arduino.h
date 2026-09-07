@@ -17,6 +17,16 @@
 #include <cstdio>
 #include <cstring>
 
+// Arduino type aliases that vendored libraries expect. Deliberately the same
+// definitions the real core uses, not std::byte - Dusk2Dawn casts to them.
+typedef uint8_t byte;
+typedef bool boolean;
+typedef unsigned int word;
+
+// Same value the Arduino core defines. Dusk2Dawn converts between degrees and
+// radians with it.
+#define PI 3.1415926535897932384626433832795
+
 // ---------------------------------------------------------------------------
 // Fake clock. Tests move time explicitly - nothing here advances on its own,
 // so a test that expects a stop after 12 s does not have to wait 12 s.
