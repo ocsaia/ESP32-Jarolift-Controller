@@ -149,17 +149,26 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
   // MQTT disabled the press used to disappear completely.
   ESP_LOGI(TAG, "received remote signal | serial: 0x%08lx | cmd: %s, | channel: %s", serial, fun, chBIN);
 
-  // Everything below only produces MQTT traffic. This runs in loop() straight
-  // after the RX burst, so building the JSON document and scanning the remote
-  // list while disconnected would be pure heap churn with no consumer.
-  if (!mqttIsConnected()) {
-    return;
-  }
-
-  char topic[MQTT_TOPIC_BUF_LEN];
-
-  // unknown as default
-  const char *remoteName = "unknown";
+  /*
+   * Look the remote up and tell the tracker BEFORE the connection check.
+   *
+   * A physical remote moves the shutter just as much as this controller does,
+   * so the estimate has to follow it - otherwise one press of a wall remote
+   * invalidates every position until the next end-stop. That reasoning does not
+   * stop being true when the broker is unreachable: the shutter still moves,
+   * and a WiFi or broker outage is exactly when someone reaches for the wall
+   * switch instead of the app. Leaving the tracker behind the early return
+   * meant the estimate silently desynced for the whole outage and stayed wrong
+   * afterwards.
+   *
+   * The early return is upstream's and predates position tracking, when the
+   * comment it carried - "everything below only produces MQTT traffic" - was
+   * true. It stopped being true when the notify calls were added after it.
+   *
+   * Publishing from here while disconnected is harmless: mqttPublish() hands
+   * straight to AsyncMqttClient, which fails quietly when it has no session.
+   */
+  const char *remoteName = "unknown"; // until a configured remote matches
   for (int i = 0; i < 16; i++) {
     if (config.jaro.remote_enable[i] && (serial >> 8 == config.jaro.remote_serial[i])) {
       remoteName = config.jaro.remote_name[i];
@@ -167,9 +176,6 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
       // check if this remote is registered for one or more shutter
       for (int j = 0; j < 16; j++) {
         if (config.jaro.remote_mask[i] & (1 << j)) {
-          // A physical remote moves the shutter just as much as this controller
-          // does, so the estimate has to follow it - otherwise one press of a
-          // wall remote invalidates every position until the next end-stop.
           switch (function) {
           case 0x2:
             shutterPosNotifyDown(j);
@@ -188,9 +194,17 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
           }
         }
       }
-      break; // stop is first remote was found
+      break; // stop if a remote was found
     }
   }
+
+  // Only the status telegram is left, and that has no consumer while the broker
+  // is away - building the JSON for nobody would be pure heap churn.
+  if (!mqttIsConnected()) {
+    return;
+  }
+
+  char topic[MQTT_TOPIC_BUF_LEN];
 
   JsonDocument remoteJSON;
   remoteJSON["name"] = remoteName;
