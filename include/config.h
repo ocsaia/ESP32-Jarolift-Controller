@@ -54,6 +54,8 @@ struct s_cfg_timer {
   char min_time_value[6]; // fixed Time value (hh:mm)
   bool use_max_time;
   char max_time_value[6]; // fixed Time value (hh:mm)
+  uint8_t astro_mode;     // ASTRO_* - which definition of "sunrise" to use
+  int8_t horizon_value;   // degrees of obstruction, only for ASTRO_HORIZON
 };
 
 struct s_cfg_geo {
