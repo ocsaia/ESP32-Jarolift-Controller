@@ -44,6 +44,13 @@ test drives itself, and no-op log macros. Keep it minimal, so it stays obvious
 what is real and what is faked. A test includes the module's `.cpp` directly, so
 the test binary never links the rest of the firmware.
 
+The suites build with ASan and UBSan by default (`SAN=0` opts out). That is
+where their value over the compiler mostly comes from: these modules are index
+arithmetic over fixed-size arrays and millisecond deltas that have to survive
+the 32 bit wrap, and neither an out-of-range index nor signed overflow fails an
+assertion on its own. `-fno-sanitize-recover=all` is deliberate - without it
+UBSan reports the problem and the suite still exits 0.
+
 Everything else - the radio timing, KeeLoq, the real travel time of a shutter,
 flashing - can only be checked on hardware, which the agent does not have. Do
 not claim runtime behaviour was verified.
