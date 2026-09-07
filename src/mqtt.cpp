@@ -258,6 +258,12 @@ void mqttCyclic() {
  * @param   topicCopy, cmpTopic
  * @return  none
  * *******************************************************************/
+// What checkJaroCmd() reports back. Two different failures deserve two answers:
+// a topic meant for some other handler, and one meant for this handler but
+// carrying an index the firmware does not have.
+#define JARO_CMD_NO_MATCH (-1)
+#define JARO_CMD_BAD_INDEX (-2)
+
 int checkJaroCmd(const char *topicCopy, const char *cmpTopic, int maxChannel) {
 
   size_t cmpTopicLen = strlen(cmpTopic);
@@ -265,13 +271,31 @@ int checkJaroCmd(const char *topicCopy, const char *cmpTopic, int maxChannel) {
   if (strncmp(topicCopy, cmpTopic, cmpTopicLen) == 0) {
     const char *suffix = topicCopy + cmpTopicLen;
     char *endPtr;
-    int channel = strtol(suffix, &endPtr, 10);
+    // long, and range-checked before it is narrowed. strtol saturates at
+    // LONG_MAX, so on a 64 bit host anything above 2^32 would otherwise
+    // truncate into a perfectly valid-looking channel number.
+    long channel = strtol(suffix, &endPtr, 10);
 
-    if (*endPtr == '\0' && channel >= 1 && channel <= maxChannel) {
-      return channel;
+    // Only a suffix that is entirely a number is addressed at this family, and
+    // the two halves of that guard catch different things.
+    //
+    // *endPtr == 0 is what keeps /cmd/group/up and its siblings working: they
+    // share the /cmd/group/ prefix, strtol stops on the 'u', and they have to
+    // read as "not mine" so the bitmask handling further down still sees them.
+    // It also rejects a suffix like "1x", which would otherwise pass as 1.
+    //
+    // endPtr != suffix covers the bare prefix, /cmd/group/ with nothing after
+    // it: strtol consumes nothing and leaves endPtr on the terminator, so the
+    // first half alone would report it as group 0 - a bad index - when it
+    // actually names no group at all.
+    if (*endPtr == 0 && endPtr != suffix) {
+      if (channel >= 1 && channel <= maxChannel) {
+        return (int)channel;
+      }
+      return JARO_CMD_BAD_INDEX;
     }
   }
-  return -1;
+  return JARO_CMD_NO_MATCH;
 }
 
 /**
@@ -423,7 +447,7 @@ void mqttHandleCommand(const char *topic, const char *payload) {
       mqttDiscoverySetup(false); // send actual discovery configuration
     }
     // Shutter commands
-  } else if (channel != -1) {
+  } else if (channel != JARO_CMD_NO_MATCH) {
     if (channel >= 1 && channel <= 16) {
       if (strcasecmp(payload, "UP") == 0 || strcasecmp(payload, "OPEN") == 0 || strcmp(payload, "0") == 0) {
         jaroCmd(CMD_UP, channel - 1);
@@ -444,7 +468,7 @@ void mqttHandleCommand(const char *topic, const char *payload) {
       ESP_LOGW(TAG, "invalid channel for shutter cmd");
     }
     // Group commands
-  } else if (group != -1) {
+  } else if (group != JARO_CMD_NO_MATCH) {
     if (group >= 1 && group <= 6) {
       if (strcasecmp(payload, "UP") == 0 || strcasecmp(payload, "OPEN") == 0 || strcmp(payload, "0") == 0) {
         jaroCmd(CMD_GRP_UP, config.jaro.grp_mask[group - 1]);

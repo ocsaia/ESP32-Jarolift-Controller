@@ -152,13 +152,14 @@ producing twenty-four subtly broken copies. Edit block 0, then run it.
   Verified by mutation: performing exactly the tidy-up the comment forbids makes
   every shutter topic stop matching, and the suite says so immediately.
 
-  Two dead branches turned up while writing them. `checkJaroCmd()` already
-  range-checks and returns -1, so `mqttHandleCommand()`'s own
-  `if (channel >= 1 && channel <= 16)` is always true and the `else` that would
-  answer "invalid channel" is unreachable - likewise "invalid group". A user who
-  addresses `/cmd/shutter/17` gets "unknown topic" instead. The tests pin the
-  behaviour that exists; making the better message reachable is a behaviour
-  change and has not been done.
+  Two dead branches turned up while writing them, and have since been brought
+  back to life. `checkJaroCmd()` returned -1 both for a topic belonging to some
+  other handler and for one naming a channel the firmware does not have, so
+  `/cmd/shutter/17` answered "unknown topic" and the "invalid channel" branch
+  could never run. It now reports the two separately. The subtle part is that
+  `/cmd/group/up` shares the `/cmd/group/` prefix and must keep reading as "not
+  mine", so only a suffix that is *entirely* a number counts as an index -
+  both halves of that guard have a test that fails without them.
 - **The WebUI simulator is published** to
   <https://ocsaia.github.io/ESP32-Jarolift-Controller/> from the `gh-pages`
   branch. It is driven by `sim.json` with no radio and no MQTT, so it proves
