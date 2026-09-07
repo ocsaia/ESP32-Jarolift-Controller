@@ -65,6 +65,16 @@ public:
   void setKeys(unsigned long masterMSB, unsigned long masterLSB);
   void setRemoteCallback(void (*callback)(uint32_t serial, int8_t function, uint16_t channel)) { remoteCallback = callback; }
 
+  /*
+   * Hand the library a way to feed the caller's watchdog.
+   *
+   * The service sequences transmit for seconds at a time and run entirely
+   * inside the caller's task, so nothing else in that task gets to run - see
+   * radioTx() for where this is called and why that point is safe. Optional:
+   * with no callback set the library behaves exactly as before.
+   */
+  void setWatchdogCallback(void (*callback)()) { watchdogCallback = callback; }
+
   // Hilfsfunktionen
   uint16_t getDeviceCounter();
   void setDeviceCounter(uint16_t newDevCnt);
@@ -197,6 +207,7 @@ private:
   uint32_t rxDecode();
 
   void (*remoteCallback)(uint32_t serial, int8_t function, uint16_t channel) = nullptr;
+  void (*watchdogCallback)() = nullptr;
 
   // Interrupt-Service-Routine (ISR) für RX-Messung
   static void IRAM_ATTR radioRxMeasureISR();

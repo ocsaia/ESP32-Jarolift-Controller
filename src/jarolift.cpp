@@ -1,6 +1,8 @@
+#include <EspSysUtil.h>
 #include <JaroliftController.h>
 #include <basics.h>
 #include <config.h>
+#include <esp_task_wdt.h>
 #include <jarolift.h>
 #include <mqtt.h>
 #include <queue>
@@ -23,6 +25,23 @@
 static muTimer cmdTimer = muTimer();
 static muTimer timerTimer = muTimer();
 static const char *TAG = "JARO"; // LOG TAG
+static auto &wdt = EspSysUtil::Wdt::getInstance();
+
+/**
+ * *******************************************************************
+ * @brief   feed the task watchdog from inside a long radio sequence
+ * @details Handed to the library so it can call this between frames. The
+ *          isActive() guard matters: the watchdog is switched off during OTA
+ *          and in setup mode, and esp_task_wdt_reset() on an unsubscribed task
+ *          is an error rather than a no-op.
+ * @param   none
+ * @return  none
+ * *******************************************************************/
+static void jaroFeedWatchdog() {
+  if (wdt.isActive()) {
+    esp_task_wdt_reset();
+  }
+}
 
 std::queue<JaroCommand> jaroCmdQueue;
 
@@ -263,6 +282,7 @@ void jaroliftSetup() {
   ESP_LOGI(TAG, "read Device Counter from FLASH: %i", jarolift.getDeviceCounter());
 
   jarolift.setRemoteCallback(mqttSendRemote);
+  jarolift.setWatchdogCallback(jaroFeedWatchdog);
 
   shutterPosSetup();
 }
