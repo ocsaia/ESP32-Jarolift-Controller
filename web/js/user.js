@@ -107,6 +107,21 @@ async function loadSimulatedData() {
   }
 }
 
+// The custom horizon angle only means anything for the ASTRO_HORIZON mode, so
+// its input follows the mode selector.
+function toggleHorizonInput(selectElement) {
+  const matches = selectElement.id.match(/\d+/g);
+  const timerId = matches[matches.length - 1];
+  const horizonInput = document.getElementById(`horizonInput${timerId}`);
+
+  if (!horizonInput) {
+    console.error(`horizonInput${timerId} not found`);
+    return;
+  }
+  // value 4 == ASTRO_HORIZON
+  horizonInput.style.display = selectElement.value === "4" ? "block" : "none";
+}
+
 function updateUIcallbackSelect(elementId, value) {
   const element = document.getElementById(elementId);
   if (element) {
@@ -114,6 +129,11 @@ function updateUIcallbackSelect(elementId, value) {
     if (element.dataset.toggle === "timeInputs") {
       toggleTimeInputs(element);
       toggleTimeInputsMinMax(element);
+    }
+    // the mode selector has no data-toggle, so it is matched by id: the stored
+    // value has to reach the horizon input on load, not only on a user change
+    if (/^cfg_timer_\d+_astro_mode$/.test(elementId)) {
+      toggleHorizonInput(element);
     }
   }
 }

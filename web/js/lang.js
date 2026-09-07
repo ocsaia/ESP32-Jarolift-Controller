@@ -54,6 +54,34 @@ const user_translations = {
     de: "keine Kalibrierung aktiv",
     en: "no calibration running",
   },
+  astro_mode: {
+    de: "Sonnenstand",
+    en: "sun position",
+  },
+  astro_real: {
+    de: "Sonnenauf-/untergang",
+    en: "sunrise / sunset",
+  },
+  astro_civil: {
+    de: "buergerliche Daemmerung",
+    en: "civil twilight",
+  },
+  astro_nautical: {
+    de: "nautische Daemmerung",
+    en: "nautical twilight",
+  },
+  astro_astronomical: {
+    de: "astronomische Daemmerung",
+    en: "astronomical twilight",
+  },
+  astro_horizon: {
+    de: "eigener Horizont",
+    en: "custom horizon",
+  },
+  horizon_desc: {
+    de: "Verdeckung in Grad - ein Berg oder Gebaeude im Westen laesst die Sonne frueher verschwinden und spaeter erscheinen. Negativ, wenn die Sicht weiter reicht als der echte Horizont.",
+    en: "obstruction in degrees - a hill or building to the west makes the sun disappear earlier and appear later. Negative if the view reaches past the true horizon.",
+  },
   travel_down: {
     de: "Fahrzeit ab",
     en: "travel time down",
