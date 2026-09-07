@@ -127,6 +127,24 @@ It verifies the substitution against every block that already exists before
 writing anything, so a token that is still hard-coded aborts the run instead of
 producing twenty-four subtly broken copies. Edit block 0, then run it.
 
+**Phase 3 - infrastructure.** Three things the code itself cannot provide:
+
+- **CI** (E5) runs on every pull request: the native tests, then a build of
+  esp32, esp32s2, esp32s3, esp32s3_16mb and esp32c3 with a check that project
+  sources stay warning-free. esp32c3 builds green there, which is what proves
+  the local `as.exe` failure is an environment problem rather than a source one.
+- **`main` is protected** (E6) by the `main: PR only` ruleset: pull request
+  required, `Tests and firmware` must pass, force pushes and deletion blocked,
+  bypass list empty. Required approvals is deliberately **0** - GitHub does not
+  let an author approve their own pull request, so any higher number would
+  deadlock a single-maintainer fork. The rule applies to the agent too.
+- **The WebUI simulator is published** to
+  <https://ocsaia.github.io/ESP32-Jarolift-Controller/> from the `gh-pages`
+  branch. It is driven by `sim.json` with no radio and no MQTT, so it proves
+  nothing about runtime behaviour - but it is the only way to look at the
+  interface without flashing a device, and everything Phase 2 added to the pages
+  was until then compile-checked only.
+
 ---
 
 ## A. Crash / memory corruption (P0)
@@ -339,6 +357,8 @@ do.
 | E2 | Add `-Wformat=2 -Wno-format-nonliteral` to `build_flags`. `-Wall` alone misses **C3** entirely; with the flag the compiler flags all 13 sites and nothing else. |
 | E3 | `release/*.bin` are tracked **and** rewritten by `scripts/build_release.py` on every build — building a single target deletes the other targets' binaries. Either gitignore them on this fork or `git checkout -- release/` after each build. |
 | E4 | No `CLAUDE.md`. Add one covering: build commands, the **E3** trap, the **E1** pin syntax, `.clang-format`, and the task-context rule (AsyncTCP vs `loop()`) that **A2**/**B4** exist because of. |
+| E5 | No continuous integration. Nothing stopped a change that only builds on one target, and the native tests had to be remembered. |
+| E6 | Anyone with push rights, including the agent, could write straight to `main`, and there was no way to see the WebUI without flashing hardware. |
 
 Baseline measurements (`pio run -e esp32`, after the E1 fix):
 
