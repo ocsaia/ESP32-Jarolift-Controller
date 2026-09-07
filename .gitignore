@@ -15,3 +15,15 @@
 connect.txt
 zTest/
 TODO.txt
+
+## Device backups - never commit these #######################################
+# A config.json read off a device carries the KeeLoq master keys, the base
+# serial every channel's device key is derived from, and the WiFi and MQTT
+# credentials. This fork is public. Anchored to the root on purpose: the
+# tracked web/output/config.json is the simulator's dummy file and must stay
+# tracked.
+/config.json
+
+# Full or partial flash dumps taken with esptool before flashing. Same secrets,
+# plus the NVS rolling counter.
+/backup-*.bin
