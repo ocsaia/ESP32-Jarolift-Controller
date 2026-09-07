@@ -331,6 +331,153 @@ static void test_out_of_range_channel_is_rejected() {
   TEST_ASSERT_EQUAL_INT(SHUTTER_POS_UNKNOWN, shutterPosGet(99));
 }
 
+
+/* C A L I B R A T I O N ******************************************************/
+
+static void test_calibration_measures_a_full_travel() {
+  TEST_ASSERT_TRUE(shutterCalibStart(CH, true));
+  TEST_ASSERT_TRUE(shutterCalibIsActive(CH));
+  TEST_ASSERT_EQUAL_INT_MESSAGE(1, moveCmdCount(), "no move was sent");
+  TEST_ASSERT_EQUAL_INT(s_radioCall::CMD_DOWN_CALL, radioCalls[0].kind);
+
+  shutterPosNotifyDown(CH);
+  advance(24000);
+
+  uint32_t measured = shutterCalibFinish(CH);
+  TEST_ASSERT_UINT32_WITHIN(100, 24000, measured);
+  TEST_ASSERT_EQUAL_UINT32(measured, config.jaro.ch_travel_down[CH]);
+  TEST_ASSERT_FALSE(shutterCalibIsActive(CH));
+  // the run ended at the bottom end-stop, so the position is known exactly
+  TEST_ASSERT_EQUAL_INT(0, shutterPosGet(CH));
+}
+
+// The command queue holds a command for up to SEND_CYCLE, and a service command
+// can hold the loop for seconds. Measuring that as travel would bake the delay
+// into every later positioning on this channel.
+static void test_calibration_stopwatch_starts_at_the_telegram() {
+  shutterCalibStart(CH, true);
+  advance(3000); // the command sits in the queue
+  shutterPosNotifyDown(CH);
+  advance(20000);
+
+  uint32_t measured = shutterCalibFinish(CH);
+  TEST_ASSERT_UINT32_WITHIN_MESSAGE(100, 20000, measured, "queue delay was measured as travel");
+}
+
+static void test_calibration_works_on_an_uncalibrated_channel() {
+  config.jaro.ch_travel_down[CH] = 0;
+  config.jaro.ch_travel_up[CH] = 0;
+
+  TEST_ASSERT_TRUE(shutterCalibStart(CH, true));
+  shutterPosNotifyDown(CH);
+  advance(18000);
+
+  // without the calibration guard the notify path would have settled this
+  // channel instantly, because it has no travel time to interpolate with
+  TEST_ASSERT_TRUE_MESSAGE(shutterCalibIsActive(CH), "run ended on its own");
+  uint32_t measured = shutterCalibFinish(CH);
+  TEST_ASSERT_UINT32_WITHIN(100, 18000, measured);
+  TEST_ASSERT_TRUE(shutterPosIsCalibrated(CH));
+}
+
+// Re-measuring a channel that already has a travel time must not be cut short
+// by the old value.
+static void test_recalibration_is_not_settled_by_the_old_travel_time() {
+  TEST_ASSERT_EQUAL_UINT32(TRAVEL_MS, config.jaro.ch_travel_down[CH]);
+
+  shutterCalibStart(CH, true);
+  shutterPosNotifyDown(CH);
+  advance(TRAVEL_MS + 10000); // the real shutter is slower than the old value
+
+  TEST_ASSERT_TRUE_MESSAGE(shutterCalibIsActive(CH), "settled on the old travel time");
+  uint32_t measured = shutterCalibFinish(CH);
+  TEST_ASSERT_UINT32_WITHIN(200, TRAVEL_MS + 10000, measured);
+  TEST_ASSERT_EQUAL_UINT32(measured, config.jaro.ch_travel_down[CH]);
+}
+
+static void test_calibrating_up_leaves_the_down_time_alone() {
+  shutterCalibStart(CH, false);
+  shutterPosNotifyUp(CH);
+  advance(26000);
+
+  uint32_t measured = shutterCalibFinish(CH);
+  TEST_ASSERT_UINT32_WITHIN(100, 26000, measured);
+  TEST_ASSERT_EQUAL_UINT32(measured, config.jaro.ch_travel_up[CH]);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(TRAVEL_MS, config.jaro.ch_travel_down[CH], "the DOWN time was overwritten");
+  TEST_ASSERT_EQUAL_INT(100, shutterPosGet(CH));
+}
+
+// A mis-click must not become the reference for every later positioning.
+static void test_implausibly_short_measurement_is_discarded() {
+  shutterCalibStart(CH, true);
+  shutterPosNotifyDown(CH);
+  advance(500);
+
+  TEST_ASSERT_EQUAL_UINT32(0, shutterCalibFinish(CH));
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(TRAVEL_MS, config.jaro.ch_travel_down[CH], "a 500 ms travel was stored");
+  TEST_ASSERT_FALSE(shutterCalibIsActive(CH));
+  TEST_ASSERT_EQUAL_INT(SHUTTER_POS_UNKNOWN, shutterPosGet(CH));
+}
+
+static void test_implausibly_long_measurement_is_discarded() {
+  shutterCalibStart(CH, true);
+  shutterPosNotifyDown(CH);
+  advance(CALIB_MAX_TRAVEL_MS + 5000);
+
+  TEST_ASSERT_EQUAL_UINT32(0, shutterCalibFinish(CH));
+  TEST_ASSERT_EQUAL_UINT32(TRAVEL_MS, config.jaro.ch_travel_down[CH]);
+}
+
+static void test_finishing_before_the_telegram_measures_nothing() {
+  shutterCalibStart(CH, true);
+  // no notify - the command is still in the queue
+  TEST_ASSERT_EQUAL_UINT32(0, shutterCalibFinish(CH));
+  TEST_ASSERT_FALSE(shutterCalibIsActive(CH));
+  TEST_ASSERT_EQUAL_UINT32(TRAVEL_MS, config.jaro.ch_travel_down[CH]);
+}
+
+static void test_abort_stops_the_shutter_and_forgets_the_position() {
+  anchorAt(100);
+  shutterCalibStart(CH, true);
+  shutterPosNotifyDown(CH);
+  advance(6000);
+  radioCallCount = 0;
+
+  shutterCalibAbort(CH);
+
+  TEST_ASSERT_EQUAL_INT_MESSAGE(1, stopNowCount(), "the shutter was left running");
+  TEST_ASSERT_FALSE(shutterCalibIsActive(CH));
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(TRAVEL_MS, config.jaro.ch_travel_down[CH], "an aborted run was stored");
+  // it stopped part way through an unmeasured travel - claiming a position here
+  // would be a guess dressed up as a measurement
+  TEST_ASSERT_EQUAL_INT(SHUTTER_POS_UNKNOWN, shutterPosGet(CH));
+}
+
+static void test_a_second_run_is_refused_while_one_is_active() {
+  TEST_ASSERT_TRUE(shutterCalibStart(CH, true));
+  TEST_ASSERT_FALSE(shutterCalibStart(CH, false));
+  TEST_ASSERT_FALSE(shutterCalibStart(CH, true));
+}
+
+static void test_calibration_stops_a_shutter_that_is_already_moving() {
+  anchorAt(100);
+  shutterPosSetTarget(CH, 40);
+  shutterPosNotifyDown(CH);
+  advance(TRAVEL_MS * 20 / 100);
+  radioCallCount = 0;
+
+  TEST_ASSERT_TRUE(shutterCalibStart(CH, true));
+  // starting the stopwatch part way through a travel would measure less than a
+  // full one, so the movement in progress has to be ended first
+  TEST_ASSERT_EQUAL_INT_MESSAGE(1, stopNowCount(), "did not stop the movement in progress");
+}
+
+static void test_calibration_rejects_an_out_of_range_channel() {
+  TEST_ASSERT_FALSE(shutterCalibStart(99, true));
+  TEST_ASSERT_FALSE(shutterCalibIsActive(99));
+  TEST_ASSERT_EQUAL_UINT32(0, shutterCalibFinish(99));
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_position_starts_unknown);
@@ -348,5 +495,18 @@ int main(int, char **) {
   RUN_TEST(test_up_travel_falls_back_to_a_factor_of_down);
   RUN_TEST(test_remote_driven_movement_is_tracked);
   RUN_TEST(test_out_of_range_channel_is_rejected);
+
+  RUN_TEST(test_calibration_measures_a_full_travel);
+  RUN_TEST(test_calibration_stopwatch_starts_at_the_telegram);
+  RUN_TEST(test_calibration_works_on_an_uncalibrated_channel);
+  RUN_TEST(test_recalibration_is_not_settled_by_the_old_travel_time);
+  RUN_TEST(test_calibrating_up_leaves_the_down_time_alone);
+  RUN_TEST(test_implausibly_short_measurement_is_discarded);
+  RUN_TEST(test_implausibly_long_measurement_is_discarded);
+  RUN_TEST(test_finishing_before_the_telegram_measures_nothing);
+  RUN_TEST(test_abort_stops_the_shutter_and_forgets_the_position);
+  RUN_TEST(test_a_second_run_is_refused_while_one_is_active);
+  RUN_TEST(test_calibration_stops_a_shutter_that_is_already_moving);
+  RUN_TEST(test_calibration_rejects_an_out_of_range_channel);
   return UNITY_END();
 }

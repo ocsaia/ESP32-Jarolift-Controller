@@ -45,3 +45,29 @@ bool shutterPosSetTarget(uint8_t channel, uint8_t targetPct);
 int8_t shutterPosGet(uint8_t channel);
 bool shutterPosIsCalibrated(uint8_t channel);
 bool shutterPosIsMoving(uint8_t channel);
+
+/*
+ * Calibration measures one full travel, in one direction, by watching the
+ * shutter run into its own end-stop.
+ *
+ * The protocol is deliberately manual, because the receiver reports nothing:
+ *
+ *   1. put the shutter at the opposite end by hand or with UP/DOWN
+ *   2. shutterCalibStart() - this sends the move and starts a stopwatch when
+ *      the telegram actually goes out, not when the call is made
+ *   3. WAIT until the shutter has visibly stopped at the end-stop
+ *   4. shutterCalibFinish() - stores the measurement and returns it
+ *
+ * Step 3 is the part that has to be got right: finishing early stores a travel
+ * time shorter than the real one, and every later positioning is then wrong in
+ * the same proportion. Only grossly implausible values are rejected outright.
+ */
+
+// milliseconds - anything outside this is a mis-click, not a roller shutter
+#define CALIB_MIN_TRAVEL_MS 2000u
+#define CALIB_MAX_TRAVEL_MS 180000u
+
+bool shutterCalibStart(uint8_t channel, bool downwards);
+uint32_t shutterCalibFinish(uint8_t channel);
+void shutterCalibAbort(uint8_t channel);
+bool shutterCalibIsActive(uint8_t channel);
