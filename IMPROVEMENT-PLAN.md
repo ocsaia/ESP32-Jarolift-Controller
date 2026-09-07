@@ -49,7 +49,7 @@ misbehaves.
 
 | Item | Why it did not land |
 |------|---------------------|
-| **F4** | Deliberately dropped. `EspWebUI::sendWs()` allocates the whole dump through `ws.makeBuffer()`, whose `std::make_shared<std::vector>` aborts rather than returning null with exceptions disabled - so raising the ring from 200 to 320 trades log history against a panic reboot. Chunking needs a new WebSocket command on both sides plus a regeneration of `include/gzip_*.h`. |
+| **F4** | Partly done, and the rest is not possible. The abort risk it was blocked on is fixed - the dump is bounded now - but the ring cannot grow: 320 lines overflows the esp32s2's `dram0_0_seg` by 1128 bytes. Raising it would mean dropping that target or making the size target-dependent, and it would spend the S2's entire remaining static headroom on log history. True chunking, which would let the browser show a longer history, still needs an append command in EspWebUI on both the firmware and the client side - the client clears its output on every `add_log` - so it means forking or contributing to that library. |
 
 ### New findings from review, not yet fixed
 
