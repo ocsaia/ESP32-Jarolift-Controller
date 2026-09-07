@@ -138,6 +138,12 @@ producing twenty-four subtly broken copies. Edit block 0, then run it.
   bypass list empty. Required approvals is deliberately **0** - GitHub does not
   let an author approve their own pull request, so any higher number would
   deadlock a single-maintainer fork. The rule applies to the agent too.
+- **Configuration persistence is tested** (E7): 14 native tests covering the
+  save/load round trip and every upgrade path from V2. The round trip is a byte
+  compare of the whole struct, so a field written under one key and read back
+  under another cannot pass. Verified by mutation - four deliberate breaks in
+  config.cpp were each caught, including a dropped `TIMER_COUNT` bound that the
+  sanitizers reported at the exact source line.
 - **The WebUI simulator is published** to
   <https://ocsaia.github.io/ESP32-Jarolift-Controller/> from the `gh-pages`
   branch. It is driven by `sim.json` with no radio and no MQTT, so it proves
@@ -359,6 +365,7 @@ do.
 | E4 | No `CLAUDE.md`. Add one covering: build commands, the **E3** trap, the **E1** pin syntax, `.clang-format`, and the task-context rule (AsyncTCP vs `loop()`) that **A2**/**B4** exist because of. |
 | E5 | No continuous integration. Nothing stopped a change that only builds on one target, and the native tests had to be remembered. |
 | E6 | Anyone with push rights, including the agent, could write straight to `main`, and there was no way to see the WebUI without flashing hardware. |
+| E7 | Nothing checked that `configSaveToFile()` and `configLoadFromFile()` agree, and nothing checked what an older config file turns into on upgrade - the one path every existing device takes. |
 
 Baseline measurements (`pio run -e esp32`, after the E1 fix):
 

@@ -39,10 +39,14 @@ docker run --rm -v "$PWD:/w" -w /w gcc:13 sh test/run_native_tests.sh
 With a host compiler on PATH, `sh test/run_native_tests.sh` does the same, and
 `pio test -e native` works too.
 
-`test/shim/Arduino.h` fakes the small surface those modules touch: a clock the
-test drives itself, and no-op log macros. Keep it minimal, so it stays obvious
-what is real and what is faked. A test includes the module's `.cpp` directly, so
-the test binary never links the rest of the firmware.
+`test/shim/` holds the stand-ins: a clock the test drives itself, no-op log
+macros and GPIO, an in-memory LittleFS, and replacements for `basics.h` and
+`EspStrUtil` (the real ones pull in WiFi and friends, and `EspStrUtil.h` cannot
+be compiled on the host at all - it declares `intToString(int)` and
+`intToString(int32_t)`, which are two functions on xtensa and one on x86). Every
+shim says at the top what it replaces and why. Keep them minimal, so it stays
+obvious what is real and what is faked. A test includes the module's `.cpp`
+directly, so the test binary never links the rest of the firmware.
 
 The suites build with ASan and UBSan by default (`SAN=0` opts out). That is
 where their value over the compiler mostly comes from: these modules are index

@@ -34,7 +34,39 @@ typedef unsigned int word;
 extern uint32_t testMillis;
 
 inline uint32_t millis() { return testMillis; }
+// muTimer offers a microsecond mode. Nothing under test uses it, but the class
+// compiles it, so the clock has to answer in the same units the tests drive.
+inline uint32_t micros() { return testMillis * 1000; }
 inline void delay(uint32_t ms) { testMillis += ms; }
+
+// ---------------------------------------------------------------------------
+// GPIO. Nothing here drives a pin - config.cpp validates the pin numbers it was
+// given and then configures them, and it is the validation that is worth
+// testing. The calls are recorded so a test can assert what was configured
+// without any of it meaning anything electrically.
+// ---------------------------------------------------------------------------
+#define LED_BUILTIN 2
+#define INPUT 0x0
+#define OUTPUT 0x3
+#define INPUT_PULLUP 0x5
+#define LOW 0x0
+#define HIGH 0x1
+
+extern int testPinMode[64];
+
+inline void pinMode(int pin, int mode) {
+  if (pin >= 0 && pin < 64) {
+    testPinMode[pin] = mode;
+  }
+}
+inline void digitalWrite(int pin, int value) {
+  (void)pin;
+  (void)value;
+}
+inline int digitalRead(int pin) {
+  (void)pin;
+  return 0;
+}
 
 // ---------------------------------------------------------------------------
 // Logging: silent by default. Set testLogEcho to see the module's own reasoning

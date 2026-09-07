@@ -15,6 +15,7 @@ set -e
 
 CXX="${CXX:-g++}"
 UNITY="${UNITY:-.pio/libdeps/esp32/Unity/src}"
+ARDUINOJSON="${ARDUINOJSON:-.pio/libdeps/esp32/ArduinoJson/src}"
 OUT="${OUT:-/tmp}"
 
 if [ ! -f "$UNITY/unity.c" ]; then
@@ -22,7 +23,14 @@ if [ ! -f "$UNITY/unity.c" ]; then
   exit 1
 fi
 
-INCLUDES="-I test/shim -I include -I lib/Dusk2Dawn -I lib/JaroliftController -I $UNITY"
+if [ ! -f "$ARDUINOJSON/ArduinoJson.h" ]; then
+  echo "ArduinoJson not found at $ARDUINOJSON - run 'pio pkg install -e esp32' first" >&2
+  exit 1
+fi
+
+# test/shim comes first so its stand-ins shadow the real headers - see the
+# comment at the top of each one for what it replaces and why.
+INCLUDES="-I test/shim -I include -I lib/Dusk2Dawn -I lib/JaroliftController -I lib/muTimer/src -I $ARDUINOJSON -I $UNITY"
 FLAGS="-std=gnu++17 -Wall"
 
 # Sanitizers are on by default.
