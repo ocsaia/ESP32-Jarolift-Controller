@@ -1,4 +1,9 @@
-# v1.9.0
+# v1.9.0-ocsaia.1
+
+Fork of dewenni/ESP32-Jarolift-Controller, based on upstream v1.9.0. What this
+fork changed, and which of it is verified on hardware, is in
+IMPROVEMENT-PLAN.md. The notes below are upstream's, for the release this fork
+started from.
 
 ## what's new
 

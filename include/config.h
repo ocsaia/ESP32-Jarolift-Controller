@@ -4,7 +4,12 @@
 /*-------------------------------------------------------------------------------
 General Configuration
 --------------------------------------------------------------------------------*/
-#define VERSION "v1.9.0" // internal program version
+// Fork version. The suffix is the point: this firmware reports itself in the
+// WebUI and in Home Assistant's sw_version, and calling itself v1.9.0 while
+// running a different position convention, a different config version and a
+// different timer count made every one of those reports a lie. The base says
+// which upstream release it started from.
+#define VERSION "v1.9.0-ocsaia.1" // internal program version
 
 #define WIFI_RECONNECT 30000     // First delay between wifi reconnection tries
 #define WIFI_RECONNECT_MAX 300000 // Backoff cap for wifi reconnection tries

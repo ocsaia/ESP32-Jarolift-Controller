@@ -3,7 +3,27 @@
 #include <github.h>
 #include <message.h>
 
-#define GITHUB_OWNER "dewenni"
+/*
+ * Where the WebUI's update check looks.
+ *
+ * This must be the fork, not upstream. The check is a plain string inequality -
+ * webUIupdates.cpp asks whether the latest release tag differs from VERSION,
+ * not whether it is newer - so any upstream release with a tag this firmware
+ * does not carry appears as "an update is available", and one click installs
+ * it over the fork.
+ *
+ * That is not a theoretical loss. Upstream firmware writes CFG_VERSION 2 back
+ * over a V5 config, taking the sixteen measured travel times, the twilight
+ * modes and timer slots 7-24 with it, and restoring the old inverted position
+ * convention that Home Assistant is now configured against. The KeeLoq keys and
+ * the base serial survive, so nothing has to be re-taught - but everything
+ * built on top of them is gone.
+ *
+ * Note the direction of the trap: raising VERSION without changing this line
+ * makes it worse, because upstream's current v1.9.0 would then differ from
+ * VERSION and be offered as an update - a downgrade presented as an upgrade.
+ */
+#define GITHUB_OWNER "ocsaia"
 #define GITHUB_REPO "ESP32-Jarolift-Controller"
 
 static const char *TAG = "GITHUB"; // LOG TAG
