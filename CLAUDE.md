@@ -56,6 +56,13 @@ translation unit, and is a toolchain/OS problem rather than a source problem -
 reinstall `toolchain-riscv32-esp` to fix it. Verify changes on `esp32`,
 `esp32s2` and `esp32s3`.
 
+Continuous integration runs the same two things on every pull request
+(`.github/workflows/build_and_test.yml`): the native tests, and a build of
+esp32, esp32s2, esp32s3 and esp32s3_16mb with a check that project sources stay
+warning-free. esp32c3 builds in a separate informational job that cannot block a
+merge, because that target has never been verified anywhere - see the known
+environment issue above.
+
 ## Things that will bite you
 
 **Never write `release/*.bin` from a normal build.** Those binaries are tracked
