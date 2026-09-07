@@ -343,6 +343,38 @@ void mqttHandleCommand(const char *topic, const char *payload) {
     const char *rest = topic + setPosPrefixLen;
     char *endPtr = NULL;
     long ch = strtol(rest, &endPtr, 10);
+    // Calibration, so a channel can be measured without the WebUI:
+    //   <base>/cmd/shutter/<n>/calibrate  <-  down | up | finish | abort
+    if (endPtr != rest && strcmp(endPtr, "/calibrate") == 0) {
+      if (ch < 1 || ch > 16) {
+        mqttPublish(addTopic("/message"), "invalid channel", false);
+        ESP_LOGW(TAG, "invalid channel for calibration");
+        return;
+      }
+      uint8_t channel = (uint8_t)(ch - 1);
+
+      if (strcasecmp(payload, "down") == 0 || strcasecmp(payload, "up") == 0) {
+        if (!shutterCalibStart(channel, strcasecmp(payload, "down") == 0)) {
+          mqttPublish(addTopic("/message"), "calibration could not be started", false);
+        }
+      } else if (strcasecmp(payload, "finish") == 0) {
+        uint32_t measured = shutterCalibFinish(channel);
+        char msg[64];
+        if (measured > 0) {
+          snprintf(msg, sizeof(msg), "channel %ld travel: %lu ms", ch, (unsigned long)measured);
+        } else {
+          snprintf(msg, sizeof(msg), "channel %ld calibration discarded", ch);
+        }
+        mqttPublish(addTopic("/message"), msg, false);
+      } else if (strcasecmp(payload, "abort") == 0) {
+        shutterCalibAbort(channel);
+      } else {
+        mqttPublish(addTopic("/message"), "use down, up, finish or abort", false);
+        ESP_LOGW(TAG, "invalid calibration payload: %s", payload);
+      }
+      return;
+    }
+
     if (endPtr != rest && strcmp(endPtr, "/set_position") == 0) {
       if (ch < 1 || ch > 16) {
         mqttPublish(addTopic("/message"), "invalid channel", false);
