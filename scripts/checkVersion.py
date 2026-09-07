@@ -11,9 +11,13 @@ def get_version_from_changenew(file_path):
     with open(file_path, 'r') as file:
         for line in file:
             # Suche nach der Version in der Form "# v4.x.x"
-            match = re.match(r'#\s*v([\d]+)\.([\d]+)\.([\d]+)', line)
+            # The suffix is optional so a fork can carry a version of its own -
+            # see VERSION in include/config.h. Both readers in this file have to
+            # accept the same shape, or the comparison below reports a conflict
+            # that does not exist.
+            match = re.match(r'#\s*(v[\d]+\.[\d]+\.[\d]+(?:-[0-9A-Za-z.\-]+)?)', line)
             if match:
-                return f'v{match.group(1)}.{match.group(2)}.{match.group(3)}'
+                return match.group(1)
     return None
 
 # Version aus include/config.h extrahieren
@@ -21,7 +25,7 @@ def get_version_from_config(file_path):
     with open(file_path, 'r') as file:
         for line in file:
             # Suche nach der Definition in der Form "#define VERSION "v4.x.x""
-            match = re.match(r'#define\s+VERSION\s+"(v[\d]+\.[\d]+\.[\d]+)"', line)
+            match = re.match(r'#define\s+VERSION\s+"(v[\d]+\.[\d]+\.[\d]+(?:-[0-9A-Za-z.\-]+)?)"', line)
             if match:
                 return match.group(1)
     return None
