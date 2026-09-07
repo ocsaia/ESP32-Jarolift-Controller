@@ -301,6 +301,33 @@ void JaroliftController::radioTx(int repetitions) {
     }
     radioTxGroupH();
     delay(16);
+
+    /*
+     * One whole frame has gone out, so this is provable forward progress
+     * rather than a blind reset.
+     *
+     * A frame costs about 117 ms - 1150 us of preamble, 13 sync pulses, 3500
+     * us, 64 data bits and 8 group bits at 1200 us each, then delay(16) - and
+     * the service commands chain many of them behind 400 ms pauses.
+     * cmdUnlearn() is the worst: sixteen frames in eight bursts, about 4.7 s in
+     * one call. The task watchdog is 10 s with trigger_panic set and is fed
+     * only from the top of loop(), so one command already spends half the
+     * budget - and a second transmitter runs in the same pass. Not the command
+     * queue, which only enqueues; shutterPosCyclic(), which walks all sixteen
+     * channels and calls jaroStopNow() for every one whose timed stop has come
+     * due, at 234 ms each. A group command starts several shutters together, so
+     * their deadlines fall in the same pass by design: eight of them is 1.9 s on
+     * top of the 4.7 s, and checkWiFi() and mqttCyclic() still follow in that
+     * same iteration. The reboot would look like a random crash, not a timeout.
+     *
+     * Feeding here bounds the gap to one frame plus one pause, about 520 ms,
+     * whatever the sequence does. It does not weaken the watchdog: a hang
+     * inside a frame - a stuck SPI transfer, an interrupt storm - never reaches
+     * this line and still trips it.
+     */
+    if (watchdogCallback != nullptr) {
+      watchdogCallback();
+    }
   }
 }
 
