@@ -26,7 +26,6 @@ constexpr const char *CONNECTED[] = {"verbunden", "connected"};
 constexpr const char *NOT_CONNECTED[] = {"nicht verbunden", "not connected"};
 constexpr const char *CC1101_NOT_FOUND[] = {"Fehler: CC1101 Modul ist nicht verbunden!", "Error: CC1101 Modul not connected!"};
 constexpr const char *JARO_KEYS_INVALID[] = {"Fehler: Jarolift Keys ungültig!", "Error: Jarolift keys invalid!"};
-constexpr const char *SERIAL_INVALID[] = {"Fehler: Serialnummer ungültig!", "Error: Serialnumber invalid!"};
 constexpr const char *POSITION_UNAVAILABLE[] = {"Position nicht moeglich - erst kalibrieren oder ganz auf/zu fahren",
                                                 "position not available - calibrate, or drive fully open or closed first"};
 constexpr const char *CALIB_BUSY[] = {"Kalibrierung laeuft bereits", "a calibration is already running"};

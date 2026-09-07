@@ -565,9 +565,32 @@ void webUIupdates() {
       } else if (config.jaro.masterLSB == 0 || config.jaro.masterMSB == 0) {
         webUI.wsUpdateWebHideElement("errorBar", false);
         webUI.wsUpdateWebText("errorBarText", WEB_TXT::JARO_KEYS_INVALID[config.lang], false);
-      } else if (config.jaro.serial == 0) {
-        webUI.wsUpdateWebHideElement("errorBar", false);
-        webUI.wsUpdateWebText("errorBarText", WEB_TXT::SERIAL_INVALID[config.lang], false);
+        /*
+         * There used to be a third case here: config.jaro.serial == 0 raised
+         * "Serialnumber invalid!". It is not invalid. Zero is a legal base
+         * serial - the channels become 0x00..0x0F - and a device configured
+         * that way works, transmits and stays paired with its receivers. The
+         * error bar sat there permanently on a correctly working installation.
+         *
+         * It cannot be rescued by rewording it either. configInitValue() never
+         * assigns a serial, so an untouched install is also 0, and a stored 0
+         * and a missing key both arrive as 0: "never configured" and
+         * "deliberately zero" are the same value, and the firmware cannot tell
+         * them apart. Warning on the pair means warning on the working case.
+         *
+         * Nothing is lost by dropping it. jaroliftSetup() already logs "Set
+         * base serial: 0x........" on every boot, so the value is visible to
+         * anyone looking for it, and the serial is on the settings page.
+         *
+         * The master key check above is deliberately kept. An all-zero KeeLoq
+         * manufacturer key is not a configuration anybody chooses - unlike a
+         * zero serial, it really does mean the field was never filled in.
+         *
+         * Telling the two apart properly would need a flag recording that the
+         * user chose a serial, and a CFG_VERSION bump to carry it. That is a
+         * reasonable thing to add; it is not a reason to keep a false alarm in
+         * the meantime.
+         */
       } else {
         webUI.wsUpdateWebHideElement("errorBar", true);
       }
