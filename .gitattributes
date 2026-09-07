@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings: this repository is developed on Windows
+# with core.autocrlf=true, and a CRLF script fails in a Linux container with
+# "set: Illegal option -" - which is a confusing way to learn about line endings.
+*.sh text eol=lf

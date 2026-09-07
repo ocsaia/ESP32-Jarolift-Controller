@@ -73,6 +73,37 @@ void executeCommand(const s_cfg_timer &timer, uint8_t number) {
 
 /**
  * *******************************************************************
+ * @brief   solar zenith angle for an astro mode
+ * @param   astroMode, horizonValue
+ * @return  degrees from the zenith
+ * *******************************************************************
+ */
+float astroZenith(uint8_t astroMode, int8_t horizonValue) {
+  switch (astroMode) {
+  case ASTRO_CIVIL:
+    return ZENITH_CIVIL;
+  case ASTRO_NAUTICAL:
+    return ZENITH_NAUTICAL;
+  case ASTRO_ASTRONOMICAL:
+    return ZENITH_ASTRONOMICAL;
+  case ASTRO_HORIZON:
+    if (horizonValue < ASTRO_HORIZON_MIN) {
+      horizonValue = ASTRO_HORIZON_MIN;
+    } else if (horizonValue > ASTRO_HORIZON_MAX) {
+      horizonValue = ASTRO_HORIZON_MAX;
+    }
+    // Minus, not plus: an obstruction hides the sun while it is still ABOVE the
+    // true horizon, which is a smaller zenith angle - so a hill to the west
+    // brings sunset forward and delays sunrise. A negative value is the
+    // opposite case, an observer high enough to see past the surroundings.
+    return ZENITH_OFFICIAL - (float)horizonValue;
+  default:
+    return ZENITH_OFFICIAL;
+  }
+}
+
+/**
+ * *******************************************************************
  * @brief   Get the sunrise or sunset time.
  * @param   type: TYPE_SUNRISE or TYPE_SUNDOWN.
  * @param   offset: Time offset in minutes.
@@ -83,7 +114,8 @@ void executeCommand(const s_cfg_timer &timer, uint8_t number) {
  * @return  true if the event exists on the current day, false otherwise
  * *******************************************************************
  */
-bool getSunriseOrSunset(time_t now, uint8_t type, int16_t offset, float latitude, float longitude, uint8_t &hour, uint8_t &minute) {
+bool getSunriseOrSunset(time_t now, uint8_t type, int16_t offset, float latitude, float longitude, uint8_t &hour, uint8_t &minute,
+                        uint8_t astroMode, int8_t horizonValue) {
 
   // Latched per event type: timerCyclic() calls this for every enabled astro
   // timer on each minute change and the WebUI adds two more calls per refresh,
@@ -92,6 +124,8 @@ bool getSunriseOrSunset(time_t now, uint8_t type, int16_t offset, float latitude
   // 4, which setLogLevel() maps to ESP_LOG_DEBUG. Both callers run in the
   // loop() task, so the latch needs no synchronisation.
   static bool noEventReported[3] = {false, false, false};
+
+  float zenith = astroZenith(astroMode, horizonValue);
 
   // int, not int16_t: Dusk2Dawn does not normalise its result and the offset is
   // an unbounded config field, so the sum must be wider than the day it is
@@ -119,9 +153,9 @@ bool getSunriseOrSunset(time_t now, uint8_t type, int16_t offset, float latitude
   Dusk2Dawn location(latitude, longitude, utcOffset);
 
   if (type == TYPE_SUNRISE) {
-    eventMinutes = location.sunrise(dti.tm_year + 1900, dti.tm_mon + 1, dti.tm_mday, dti.tm_isdst);
+    eventMinutes = location.sunrise(dti.tm_year + 1900, dti.tm_mon + 1, dti.tm_mday, dti.tm_isdst, zenith);
   } else {
-    eventMinutes = location.sunset(dti.tm_year + 1900, dti.tm_mon + 1, dti.tm_mday, dti.tm_isdst);
+    eventMinutes = location.sunset(dti.tm_year + 1900, dti.tm_mon + 1, dti.tm_mday, dti.tm_isdst, zenith);
   }
 
   // Polar day / polar night: there is no event to report. The old code fed the
@@ -228,7 +262,8 @@ bool checkTimerTrigger(const s_cfg_timer &timer, time_t now, uint8_t currentHour
     // window is deliberately not used as a fallback - it bounds an event, it
     // does not define one, so firing at the limit would invent a schedule the
     // user never configured.
-    if (!getSunriseOrSunset(now, timer.type, timer.offset_value, config.geo.latitude, config.geo.longitude, eventHour, eventMinute)) {
+    if (!getSunriseOrSunset(now, timer.type, timer.offset_value, config.geo.latitude, config.geo.longitude, eventHour, eventMinute,
+                            timer.astro_mode, timer.horizon_value)) {
       return false;
     }
 

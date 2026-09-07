@@ -11,8 +11,9 @@
  * V1: Initial version of dewenni.
  * V2: Added min/max times for timers.
  * V3: Added per-channel travel times for time-based position control.
+ * V4: Added twilight modes for astro timers.
  */
-const int CFG_VERSION = 3;
+const int CFG_VERSION = 4;
 
 char filename[24] = {"/config.json"};
 bool setupMode;
@@ -425,6 +426,8 @@ void configSaveToFile() {
     timer["use_max_time"] = config.timer[i].use_max_time;
     timer["min_time_value"] = config.timer[i].min_time_value;
     timer["max_time_value"] = config.timer[i].max_time_value;
+    timer["astro_mode"] = config.timer[i].astro_mode;
+    timer["horizon_value"] = config.timer[i].horizon_value;
   }
 
   // Delete existing file, otherwise the configuration is appended to the file
@@ -625,6 +628,10 @@ void configLoadFromFile() {
       config.timer[i].use_max_time = timer["use_max_time"];
       EspStrUtil::readJSONstring(config.timer[i].min_time_value, sizeof(config.timer[i].min_time_value), timer["min_time_value"]);
       EspStrUtil::readJSONstring(config.timer[i].max_time_value, sizeof(config.timer[i].max_time_value), timer["max_time_value"]);
+      // absent in a V3 config: a missing key reads as 0, which is ASTRO_REAL
+      // with no horizon offset - exactly the behaviour that existed before
+      config.timer[i].astro_mode = timer["astro_mode"];
+      config.timer[i].horizon_value = timer["horizon_value"];
     }
   }
 

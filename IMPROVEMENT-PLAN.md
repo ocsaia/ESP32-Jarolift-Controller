@@ -94,9 +94,23 @@ CLAUDE.md for how to run them). The first run of the tracker suite found two
 real defects; the calibration suite passed first time, having been written
 against the lessons of that round.
 
-**F2** (per-channel and per-group timers, weekend override, twilight modes) is
-untouched. It is the larger of the two: in the fork it rewrote the timer page
-almost completely.
+**F2 in progress.**
+
+- Native tests for the existing timer logic landed on `test/timer-logic`, and
+  verified three fixes that until then were only compile-checked: the polar
+  day/night handling, the min/max clamp and the DST reasoning.
+- **Twilight modes** landed on `feat/twilight-modes`: civil, nautical and
+  astronomical, plus a custom horizon angle for a view blocked by a hill or a
+  building. Config version 3 -> 4; a missing key reads as 0, which is the
+  previous behaviour, so no migration step is needed.
+
+Still to do for F2, in order:
+
+1. **Per-channel and per-group timers** - the big schema change. Today there are
+   six global timers with a group mask; the target is an independent UP/DOWN
+   schedule per channel and per group, with a migration from the existing six.
+2. **Weekend override** - a separate time or astro event for Saturday and Sunday.
+3. **WebUI** for both.
 
 ---
 
