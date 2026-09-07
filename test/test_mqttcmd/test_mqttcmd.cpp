@@ -204,25 +204,69 @@ static void test_the_channel_number_is_one_based_on_the_wire() {
   assertOneCall(CALL_SINGLE, CMD_UP, 15, "channel 16");
 }
 
-/*
- * A channel outside 1..16 issues nothing, and answers "unknown topic".
- *
- * Not "invalid channel", which is what the source looks like it should say:
- * checkJaroCmd() already range-checks and returns -1, so mqttHandleCommand()'s
- * own `if (channel >= 1 && channel <= 16)` is always true and its else branch
- * is unreachable. The message is less helpful than the code implies, and this
- * test says which of the two is real. Making that branch reachable would be a
- * behaviour change, not a test fix.
- */
+// A channel outside 1..16 issues nothing and says which mistake was made. The
+// number is the wrong thing, not the topic, and telling the two apart is the
+// difference between fixing a typo and hunting for a subscription problem.
 static void test_a_channel_outside_the_range_is_refused() {
   send(t("/cmd/shutter/0"), "UP");
   assertNoCall("channel 0");
-  TEST_ASSERT_EQUAL_STRING("unknown topic", lastMessage().c_str());
+  TEST_ASSERT_EQUAL_STRING("invalid channel", lastMessage().c_str());
 
   setUp();
   send(t("/cmd/shutter/17"), "UP");
   assertNoCall("channel 17");
+  TEST_ASSERT_EQUAL_STRING("invalid channel", lastMessage().c_str());
+}
+
+/*
+ * A suffix that is not purely a number belongs to no handler at all, so it
+ * stays "unknown topic" rather than being blamed on the channel.
+ *
+ * "7bogus" is the one that matters. strtol reads the 7 and stops, so a check
+ * that only asked whether a number had been read would accept it as channel 7
+ * and act on a topic nobody addressed.
+ */
+static void test_a_suffix_that_is_not_purely_a_number_is_an_unknown_topic() {
+  const char *notNumbers[] = {"kitchen", "7bogus", "7/extra", "7 "};
+  for (size_t i = 0; i < sizeof(notNumbers) / sizeof(notNumbers[0]); i++) {
+    setUp();
+    char topic[128];
+    snprintf(topic, sizeof(topic), "%s/cmd/shutter/%s", BASE, notNumbers[i]);
+    send(topic, "UP");
+    assertNoCall(notNumbers[i]);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("unknown topic", lastMessage().c_str(), notNumbers[i]);
+  }
+}
+
+/*
+ * The bare prefix names no channel and no group.
+ *
+ * strtol consumes nothing here and leaves endPtr on the terminator, so a check
+ * that only asked "was the whole suffix consumed" would see success and report
+ * index 0 - an invalid channel - for a topic that never named one.
+ */
+static void test_the_bare_prefix_names_nothing() {
+  send(t("/cmd/shutter/"), "UP");
+  assertNoCall("bare shutter prefix");
   TEST_ASSERT_EQUAL_STRING("unknown topic", lastMessage().c_str());
+
+  setUp();
+  send(t("/cmd/group/"), "UP");
+  assertNoCall("bare group prefix");
+  TEST_ASSERT_EQUAL_STRING("unknown topic", lastMessage().c_str());
+}
+
+// strtol saturates at LONG_MAX. Narrowing that to int before the range check
+// would wrap it into something that looks like a real channel.
+static void test_an_enormous_channel_number_cannot_wrap_into_range() {
+  const char *huge[] = {"4294967297", "99999999999999999999", "-1"};
+  for (size_t i = 0; i < sizeof(huge) / sizeof(huge[0]); i++) {
+    setUp();
+    char topic[128];
+    snprintf(topic, sizeof(topic), "%s/cmd/shutter/%s", BASE, huge[i]);
+    send(topic, "UP");
+    assertNoCall(huge[i]);
+  }
 }
 
 static void test_an_unknown_shutter_payload_is_reported_not_ignored() {
@@ -265,16 +309,15 @@ static void test_a_numbered_group_sends_its_configured_mask() {
   assertOneCall(CALL_GROUP, CMD_GRP_STOP, config.jaro.grp_mask[5], "group 6");
 }
 
-// Same unreachable-else story as the shutter channel above: checkJaroCmd()
-// filters the range, so "invalid group" is never sent.
 static void test_a_group_outside_the_range_is_refused() {
   send(t("/cmd/group/7"), "UP");
   assertNoCall("group 7");
-  TEST_ASSERT_EQUAL_STRING("unknown topic", lastMessage().c_str());
+  TEST_ASSERT_EQUAL_STRING("invalid group", lastMessage().c_str());
 
   setUp();
   send(t("/cmd/group/0"), "UP");
   assertNoCall("group 0");
+  TEST_ASSERT_EQUAL_STRING("invalid group", lastMessage().c_str());
 }
 
 // The other way to address a group: name the channels directly in the payload.
@@ -465,6 +508,9 @@ int main(int, char **) {
   RUN_TEST(test_payload_words_are_case_insensitive);
   RUN_TEST(test_the_channel_number_is_one_based_on_the_wire);
   RUN_TEST(test_a_channel_outside_the_range_is_refused);
+  RUN_TEST(test_a_suffix_that_is_not_purely_a_number_is_an_unknown_topic);
+  RUN_TEST(test_the_bare_prefix_names_nothing);
+  RUN_TEST(test_an_enormous_channel_number_cannot_wrap_into_range);
   RUN_TEST(test_an_unknown_shutter_payload_is_reported_not_ignored);
 
   RUN_TEST(test_a_shutter_topic_is_not_confused_with_a_group_topic);
