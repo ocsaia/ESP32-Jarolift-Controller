@@ -10,6 +10,20 @@
   #include "Arduino.h"
   #include <math.h>
 
+  /* Zenith angle of the sun at the moment being calculated. 90.833 deg is the
+   * geometric horizon plus the usual allowance for atmospheric refraction and
+   * the radius of the solar disc, which is what "sunrise" and "sunset" normally
+   * mean. The larger angles are the standard twilight definitions: the sun is
+   * that far below the horizon.
+   *
+   * Note that the further below the horizon the target is, the more often it is
+   * never reached at all - astronomical twilight does not occur at mid-northern
+   * latitudes around midsummer, and sunriseSet() reports that as no event. */
+  #define ZENITH_OFFICIAL      90.833f
+  #define ZENITH_CIVIL         96.0f
+  #define ZENITH_NAUTICAL     102.0f
+  #define ZENITH_ASTRONOMICAL 108.0f
+
   /* Returned by sunrise() and sunset() when the sun does not cross the horizon
    * on the requested date - polar day or polar night.
    *
@@ -34,8 +48,8 @@
        * the sentinel first; the value is otherwise NOT range-checked, so
        * normalise it with ((x % 1440) + 1440) % 1440 before use.
        */
-      int sunrise(int, int, int, bool);
-      int sunset(int, int, int, bool);
+      int sunrise(int, int, int, bool, float zenith = ZENITH_OFFICIAL);
+      int sunset(int, int, int, bool, float zenith = ZENITH_OFFICIAL);
       static bool min2str(char*, int);
     private:
       float _latitude, _longitude;
@@ -46,8 +60,8 @@
        * minutes off for every user in such a zone.
        */
       float _timezone;
-      int   sunriseSet(bool, int, int, int, bool);
-      float sunriseSetUTC(bool, float, float, float);
+      int   sunriseSet(bool, int, int, int, bool, float);
+      float sunriseSetUTC(bool, float, float, float, float);
       float equationOfTime(float);
       float meanObliquityOfEcliptic(float);
       float eccentricityEarthOrbit(float);
@@ -55,7 +69,7 @@
       float sunApparentLong(float);
       float sunTrueLong(float);
       float sunEqOfCenter(float);
-      float hourAngleSunrise(float, float);
+      float hourAngleSunrise(float, float, float);
       float obliquityCorrection(float);
       float geomMeanLongSun(float);
       float geomMeanAnomalySun(float);

@@ -287,6 +287,137 @@ static void test_group_command_carries_the_configured_mask() {
   TEST_ASSERT_EQUAL_HEX16(0x0A5A, lastGroupMask);
 }
 
+
+/* T W I L I G H T   M O D E S ************************************************/
+
+// Far enough north that the sun never gets 18 deg below the horizon at
+// midsummer, so astronomical twilight simply does not happen.
+#define NORDIC_LAT 55.68f
+#define NORDIC_LON 12.57f
+
+static void test_zenith_angles_match_the_standard_definitions() {
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 90.833f, astroZenith(ASTRO_REAL, 0));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 96.0f, astroZenith(ASTRO_CIVIL, 0));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 102.0f, astroZenith(ASTRO_NAUTICAL, 0));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 108.0f, astroZenith(ASTRO_ASTRONOMICAL, 0));
+  // an unknown mode must fall back to the ordinary definition rather than to 0
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 90.833f, astroZenith(99, 0));
+}
+
+// An obstruction hides the sun while it is still above the true horizon, which
+// is a SMALLER zenith angle. Getting this backwards would move every horizon
+// timer the wrong way, and the result would still look plausible.
+static void test_an_obstruction_reduces_the_zenith_angle() {
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 90.833f - 5.0f, astroZenith(ASTRO_HORIZON, 5));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 90.833f + 3.0f, astroZenith(ASTRO_HORIZON, -3));
+}
+
+static void test_horizon_value_is_clamped() {
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 90.833f - ASTRO_HORIZON_MAX, astroZenith(ASTRO_HORIZON, 120));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 90.833f - ASTRO_HORIZON_MIN, astroZenith(ASTRO_HORIZON, -120));
+}
+
+// Dusk gets later the further below the horizon the definition reaches.
+static void test_dusk_is_progressively_later_for_darker_definitions() {
+  time_t now = localMoment(2026, 3, 20, 12, 0); // equinox: all four exist
+  uint8_t h = 0, m = 0;
+  int official = 0, civil = 0, nautical = 0, astronomical = 0;
+
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNDOWN, 0, LAT, LON, h, m, ASTRO_REAL, 0));
+  official = h * 60 + m;
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNDOWN, 0, LAT, LON, h, m, ASTRO_CIVIL, 0));
+  civil = h * 60 + m;
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNDOWN, 0, LAT, LON, h, m, ASTRO_NAUTICAL, 0));
+  nautical = h * 60 + m;
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNDOWN, 0, LAT, LON, h, m, ASTRO_ASTRONOMICAL, 0));
+  astronomical = h * 60 + m;
+
+  TEST_ASSERT_TRUE_MESSAGE(civil > official, "civil dusk should be after sunset");
+  TEST_ASSERT_TRUE_MESSAGE(nautical > civil, "nautical dusk should be after civil");
+  TEST_ASSERT_TRUE_MESSAGE(astronomical > nautical, "astronomical dusk should be after nautical");
+  // roughly half an hour per step at this latitude - a sanity bound on the maths
+  TEST_ASSERT_INT_WITHIN_MESSAGE(20, 30, civil - official, "civil dusk is an implausible distance from sunset");
+}
+
+static void test_dawn_is_progressively_earlier_for_darker_definitions() {
+  time_t now = localMoment(2026, 3, 20, 12, 0);
+  uint8_t h = 0, m = 0;
+
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNRISE, 0, LAT, LON, h, m, ASTRO_REAL, 0));
+  int official = h * 60 + m;
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNRISE, 0, LAT, LON, h, m, ASTRO_CIVIL, 0));
+  int civil = h * 60 + m;
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNRISE, 0, LAT, LON, h, m, ASTRO_ASTRONOMICAL, 0));
+  int astronomical = h * 60 + m;
+
+  TEST_ASSERT_TRUE_MESSAGE(civil < official, "civil dawn should be before sunrise");
+  TEST_ASSERT_TRUE_MESSAGE(astronomical < civil, "astronomical dawn should be before civil");
+}
+
+static void test_a_hill_to_the_west_brings_sunset_forward() {
+  time_t now = localMoment(2026, 3, 20, 12, 0);
+  uint8_t h = 0, m = 0;
+
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNDOWN, 0, LAT, LON, h, m, ASTRO_REAL, 0));
+  int flat = h * 60 + m;
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNDOWN, 0, LAT, LON, h, m, ASTRO_HORIZON, 8));
+  int blocked = h * 60 + m;
+
+  TEST_ASSERT_TRUE_MESSAGE(blocked < flat, "an obstruction should make the sun disappear earlier");
+
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNRISE, 0, LAT, LON, h, m, ASTRO_REAL, 0));
+  flat = h * 60 + m;
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNRISE, 0, LAT, LON, h, m, ASTRO_HORIZON, 8));
+  blocked = h * 60 + m;
+
+  TEST_ASSERT_TRUE_MESSAGE(blocked > flat, "an obstruction should make the sun appear later");
+}
+
+// The darker the definition, the more often it is never reached. This is the
+// case that makes twilight modes different from an offset: the event genuinely
+// does not exist on some days, and the timer has to not fire rather than
+// substitute something.
+static void test_astronomical_twilight_does_not_occur_at_midsummer_up_north() {
+  time_t midsummer = localMoment(2026, 6, 21, 12, 0);
+  uint8_t h = 0, m = 0;
+
+  TEST_ASSERT_TRUE_MESSAGE(getSunriseOrSunset(midsummer, TYPE_SUNDOWN, 0, NORDIC_LAT, NORDIC_LON, h, m, ASTRO_REAL, 0),
+                           "there is still an ordinary sunset at this latitude");
+  TEST_ASSERT_FALSE_MESSAGE(getSunriseOrSunset(midsummer, TYPE_SUNDOWN, 0, NORDIC_LAT, NORDIC_LON, h, m, ASTRO_ASTRONOMICAL, 0),
+                            "reported an astronomical dusk on a night that never gets that dark");
+}
+
+static void test_a_timer_does_not_fire_when_its_twilight_never_arrives() {
+  config.geo.latitude = NORDIC_LAT;
+  config.geo.longitude = NORDIC_LON;
+
+  s_cfg_timer t{};
+  t.type = TYPE_SUNDOWN;
+  t.astro_mode = ASTRO_ASTRONOMICAL;
+  time_t midsummer = localMoment(2026, 6, 21, 12, 0);
+
+  for (int h = 0; h < 24; h++) {
+    for (int m = 0; m < 60; m += 11) {
+      TEST_ASSERT_FALSE(checkTimerTrigger(t, midsummer, (uint8_t)h, (uint8_t)m));
+    }
+  }
+}
+
+// A V3 config has neither key, so both read as 0 - and 0 has to mean exactly
+// what the firmware did before twilight modes existed.
+static void test_the_default_mode_matches_the_previous_behaviour() {
+  time_t now = localMoment(2026, 3, 20, 12, 0);
+  uint8_t h = 0, m = 0;
+  TEST_ASSERT_TRUE(getSunriseOrSunset(now, TYPE_SUNDOWN, 0, LAT, LON, h, m, ASTRO_REAL, 0));
+  int explicitReal = h * 60 + m;
+
+  // the same call through a default-constructed timer, as a migrated config
+  // would produce
+  s_cfg_timer t{};
+  t.type = TYPE_SUNDOWN;
+  TEST_ASSERT_TRUE(checkTimerTrigger(t, now, (uint8_t)(explicitReal / 60), (uint8_t)(explicitReal % 60)));
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_time_parsing_accepts_a_valid_value);
@@ -305,5 +436,15 @@ int main(int, char **) {
   RUN_TEST(test_a_malformed_limit_is_ignored);
   RUN_TEST(test_a_limit_that_does_not_bind_leaves_the_event_alone);
   RUN_TEST(test_group_command_carries_the_configured_mask);
+
+  RUN_TEST(test_zenith_angles_match_the_standard_definitions);
+  RUN_TEST(test_an_obstruction_reduces_the_zenith_angle);
+  RUN_TEST(test_horizon_value_is_clamped);
+  RUN_TEST(test_dusk_is_progressively_later_for_darker_definitions);
+  RUN_TEST(test_dawn_is_progressively_earlier_for_darker_definitions);
+  RUN_TEST(test_a_hill_to_the_west_brings_sunset_forward);
+  RUN_TEST(test_astronomical_twilight_does_not_occur_at_midsummer_up_north);
+  RUN_TEST(test_a_timer_does_not_fire_when_its_twilight_never_arrives);
+  RUN_TEST(test_the_default_mode_matches_the_previous_behaviour);
   return UNITY_END();
 }
