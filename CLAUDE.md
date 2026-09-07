@@ -75,6 +75,14 @@ script compresses `web/html`, `web/js` and `web/css` into those headers on every
 build, and they are committed. Edit the sources under `web/`; expect large
 generated diffs in `include/` whenever you do.
 
+**The RAM percentage in the build output is not the constraint on esp32s2.**
+PlatformIO reports usage against the full 320 kB of SRAM, but static data has to
+fit `dram0_0_seg`, which is far smaller on that target. At the time of writing
+esp32s2 reports 27.4 % and has about **14 kB** of static headroom left - adding
+15 kB of `.bss` fails at link with `region dram0_0_seg overflowed`. Anything
+that adds static arrays must be linked for esp32s2, not judged by the
+percentage. esp32 and esp32s3 have far more room.
+
 **Config changes need a `CFG_VERSION` bump.** `src/config.cpp` holds
 `CFG_VERSION` and a comment block describing each version. Adding a field means:
 extend the struct in `include/config.h`, write it in `configSaveToFile()`, read

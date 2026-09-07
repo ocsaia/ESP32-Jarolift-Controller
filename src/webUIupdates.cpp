@@ -24,6 +24,29 @@ static muTimer refreshTimer2 = muTimer();   // timer to refresh other values
 static muTimer otaProgessTimer = muTimer(); // timer to refresh other values
 
 static char tmpMessage[300] = {'\0'};
+
+/*
+ * Ceiling on one log dump, in bytes of serialised JSON.
+ *
+ * The whole dump travels as a single WebSocket message: jsonLog holds it once,
+ * and EspWebUI::sendWs() then measures it and asks AsyncWebSocket for a buffer
+ * of that size, so the peak is roughly twice the payload. That buffer is a
+ * std::make_shared<std::vector<uint8_t>>, and with C++ exceptions disabled a
+ * failed allocation aborts the firmware rather than returning null - the device
+ * reboots, and the log the user was trying to read is gone with it.
+ *
+ * The budget is chosen so that a typical dump is not truncated at all - log
+ * lines average well under half of MAX_LOG_ENTRY, so 16 kB holds roughly two
+ * hundred of them - while the worst case, a ring full of maximum-length lines,
+ * is capped below what the unbounded version could already ask for today. The
+ * point is not to show less than before; it is that the ceiling stops depending
+ * on how long the lines happen to be.
+ */
+#define LOG_DUMP_MAX_BYTES 16384
+
+// rough JSON cost of one array element: two quotes, a comma, and some slack for
+// the escaping of a line that contains quotes or backslashes
+#define LOG_DUMP_ENTRY_OVERHEAD 12
 static bool refreshRequest = false;
 static uint16_t devCntNew, devCntOld = 0;
 static JsonDocument jsonDoc;
@@ -294,6 +317,8 @@ void webReadLogBufferCyclic() {
   jsonLog["cmd"] = "add_log";
   JsonArray entryArray = jsonLog["entry"].to<JsonArray>();
 
+  size_t dumpBytes = 64; // the envelope: type, cmd and the array brackets
+
   while (logReadActive) {
 
     if (logLine == 0 && logData.lastLine == 0) {
@@ -325,6 +350,17 @@ void webReadLogBufferCyclic() {
       return;
     } else {
       if (logData.buffer[logIdx][0] != '\0') {
+        size_t entryBytes = strlen(logData.buffer[logIdx]) + LOG_DUMP_ENTRY_OVERHEAD;
+        if (dumpBytes + entryBytes > LOG_DUMP_MAX_BYTES) {
+          // Stop here rather than risk the allocation. Say so in the output:
+          // silently showing part of a log reads as "nothing else happened",
+          // which is worse than showing less and admitting it.
+          entryArray.add("--- older entries not shown, the log is longer than one page ---");
+          logReadActive = false;
+          webUI.wsUpdateWebJSON(jsonLog);
+          return;
+        }
+        dumpBytes += entryBytes;
         entryArray.add(logData.buffer[logIdx]);
         logLine++;
       } else {
