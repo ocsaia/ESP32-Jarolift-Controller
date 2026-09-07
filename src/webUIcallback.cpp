@@ -2,6 +2,7 @@
 #include <basics.h>
 #include <cmdQueue.h>
 #include <jarolift.h>
+#include <shutterPos.h>
 #include <message.h>
 #include <webUI.h>
 #include <webUIupdates.h>
@@ -282,6 +283,20 @@ void webCallback(const char *elementId, const char *value) {
       jaroCmd(CMD_SHADE, i);
       webUI.wsShowInfoMsg(WEB_TXT::SHUTTER_CMD_SHADE[config.lang]);
     }
+
+    char posId[32];
+    snprintf(posId, sizeof(posId), "p01_pos_%d", i);
+    if (strcmp(elementId, posId) == 0) {
+      int target = atoi(value);
+      if (target < 0 || target > 100) {
+        ESP_LOGW(TAG, "position out of range: %s", value);
+      } else if (!shutterPosSetTarget(i, (uint8_t)target)) {
+        // no travel time yet, or the position is not known well enough to aim
+        // at an intermediate one - say so rather than leaving the slider where
+        // the user put it as if it had been accepted
+        webUI.wsShowInfoMsg(WEB_TXT::POSITION_UNAVAILABLE[config.lang]);
+      }
+    }
   }
 
   // group 1-6
@@ -480,6 +495,22 @@ void webCallback(const char *elementId, const char *value) {
     jaroCmd(CMD_DEL_END_POINT_UP, srvShutter);
     webUI.wsShowInfoMsg(WEB_TXT::CMD_DEL_ENDPOINT_UP[config.lang]);
   }
+  if (strcmp(elementId, "p04_calib_start_down") == 0 || strcmp(elementId, "p04_calib_start_up") == 0) {
+    bool down = (strcmp(elementId, "p04_calib_start_down") == 0);
+    if (!shutterCalibStart(srvShutter, down)) {
+      webUI.wsShowInfoMsg(WEB_TXT::CALIB_BUSY[config.lang]);
+    }
+  }
+  if (strcmp(elementId, "p04_calib_finish") == 0) {
+    uint32_t measured = shutterCalibFinish(srvShutter);
+    if (measured == 0) {
+      webUI.wsShowInfoMsg(WEB_TXT::CALIB_DISCARDED[config.lang]);
+    }
+  }
+  if (strcmp(elementId, "p04_calib_abort") == 0) {
+    shutterCalibAbort(srvShutter);
+  }
+
   if (strcmp(elementId, "p04_cmd_end_down_delete") == 0) {
     jaroCmd(CMD_DEL_END_POINT_DOWN, srvShutter);
     webUI.wsShowInfoMsg(WEB_TXT::CMD_DEL_ENDPOINT_DOWN[config.lang]);

@@ -3,6 +3,7 @@
 #include <basics.h>
 #include <github.h>
 #include <jarolift.h>
+#include <shutterPos.h>
 #include <language.h>
 #include <message.h>
 #include <timer.h>
@@ -30,6 +31,7 @@ static int logLine, logIdx = 0;
 static bool logReadActive = false;
 JsonDocument jsonLog;
 static const char *TAG = "WEB"; // LOG TAG
+extern uint8_t srvShutter;      // service page selection, owned by webUIcallback.cpp
 static auto &ota = EspSysUtil::OTA::getInstance();
 static auto &wdt = EspSysUtil::Wdt::getInstance();
 GithubRelease ghLatestRelease;
@@ -63,6 +65,58 @@ void updateAllElements() {
  * @param   none
  * @return  none
  * *******************************************************************/
+/**
+ * *******************************************************************
+ * @brief   push shutter positions and the calibration panel to the webUI
+ * @details Sent on the slow cycle. A moving shutter therefore lags by up to
+ *          that interval, which is deliberate: pushing a position while the
+ *          user is dragging the slider would pull the handle out from under
+ *          them, and the slider only reports on release anyway.
+ * @param   none
+ * @return  none
+ * *******************************************************************/
+void updateShutterPositions() {
+
+  webUI.initJsonBuffer(jsonDoc);
+
+  for (uint8_t i = 0; i < 16; i++) {
+    if (!config.jaro.ch_enable[i]) {
+      continue;
+    }
+    char id[32];
+    snprintf(id, sizeof(id), "p01_pos_%d", i);
+    int8_t pos = shutterPosGet(i);
+    // the slider has to sit somewhere, but the label must not claim a position
+    // that has never been established
+    if (pos == SHUTTER_POS_UNKNOWN) {
+      snprintf(tmpMessage, sizeof(tmpMessage), "--");
+    } else {
+      snprintf(tmpMessage, sizeof(tmpMessage), "%d", pos);
+    }
+    webUI.addJson(jsonDoc, id, tmpMessage);
+  }
+
+  // calibration panel - always for the shutter selected on the service page
+  if (config.jaro.ch_travel_down[srvShutter] > 0) {
+    snprintf(tmpMessage, sizeof(tmpMessage), "%.1f s", config.jaro.ch_travel_down[srvShutter] / 1000.0);
+  } else {
+    snprintf(tmpMessage, sizeof(tmpMessage), "--");
+  }
+  webUI.addJson(jsonDoc, "p04_travel_down", tmpMessage);
+
+  if (config.jaro.ch_travel_up[srvShutter] > 0) {
+    snprintf(tmpMessage, sizeof(tmpMessage), "%.1f s", config.jaro.ch_travel_up[srvShutter] / 1000.0);
+  } else {
+    snprintf(tmpMessage, sizeof(tmpMessage), "--");
+  }
+  webUI.addJson(jsonDoc, "p04_travel_up", tmpMessage);
+
+  webUI.addJson(jsonDoc, "p04_calib_status",
+                shutterCalibIsActive(srvShutter) ? WEB_TXT::CALIB_RUNNING[config.lang] : WEB_TXT::CALIB_IDLE[config.lang]);
+
+  webUI.wsUpdateWebJSON(jsonDoc);
+}
+
 void updateSystemInfoElements() {
 
   refreshNetworkInfo();
@@ -483,5 +537,6 @@ void webUIupdates() {
       }
     }
     updateSystemInfoElements(); // refresh all "System" elements as one big JSON update (≈ 570 Bytes)
+    updateShutterPositions();
   }
 }
