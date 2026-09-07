@@ -17,15 +17,38 @@ pio run                   # all four targets
 pio pkg install -e esp32  # resolve dependencies only, no compile
 ```
 
-There are no unit tests and no emulator — **compiling is the verification step**.
 Always build after a change and check that project sources stay warning-free:
 
 ```bash
 pio run -e esp32 2>&1 | grep -E '^(src|lib)/.*warning:'
 ```
 
-Flashing and runtime behaviour can only be checked on real hardware, which the
-agent does not have. Do not claim runtime behaviour was verified.
+## Tests
+
+Modules that are pure logic have native unit tests under `test/`. They are worth
+running and worth extending - the position tracker's first run found a real bug
+that compiling could never have shown.
+
+```bash
+pio test -e native          # needs a host compiler (gcc/clang) on PATH
+```
+
+This machine has no host compiler, so use a container instead - it needs nothing
+installed on Windows and is what CI would run:
+
+```bash
+docker run --rm -v "$PWD:/w" -w /w gcc:13 sh -c '
+  g++ -std=gnu++17 -I test/shim -I include -I .pio/libdeps/esp32/Unity/src       test/test_shutterpos/test_shutterpos.cpp       .pio/libdeps/esp32/Unity/src/unity.c -o /tmp/t && /tmp/t'
+```
+
+`test/shim/Arduino.h` fakes the small surface those modules touch: a clock the
+test drives itself, and no-op log macros. Keep it minimal, so it stays obvious
+what is real and what is faked. A test includes the module's `.cpp` directly, so
+the test binary never links the rest of the firmware.
+
+Everything else - the radio timing, KeeLoq, the real travel time of a shutter,
+flashing - can only be checked on hardware, which the agent does not have. Do
+not claim runtime behaviour was verified.
 
 Known environment issue: on the current Windows machine `esp32c3` fails with
 `riscv32-esp-elf-g++: fatal error: cannot execute '.../as.exe': CreateProcess:
