@@ -31,6 +31,15 @@ struct s_shutterState {
 
 static s_shutterState shutter[CH_COUNT];
 
+struct s_calibState {
+  bool active;      // a calibration run has been started for this channel
+  bool measuring;   // the telegram went out, the stopwatch is running
+  bool down;        // which direction is being measured
+  uint32_t startMs; // when the telegram went out
+};
+
+static s_calibState calib[CH_COUNT];
+
 /**
  * *******************************************************************
  * @brief   full travel time for one direction
@@ -128,6 +137,26 @@ static void settleAt(uint8_t channel, int8_t position) {
 static void startMovement(uint8_t channel, bool goingDown) {
   s_shutterState &st = shutter[channel];
 
+  // A calibration run owns the channel until it finishes. The stopwatch starts
+  // HERE rather than where the run was requested: the command queue holds a
+  // command for up to SEND_CYCLE and a service command can hold the loop for
+  // seconds, and measuring that as travel would bake the delay into every
+  // future positioning.
+  if (calib[channel].active) {
+    calib[channel].measuring = true;
+    calib[channel].down = goingDown;
+    calib[channel].startMs = millis();
+    st.pos = SHUTTER_POS_UNKNOWN; // meaningless until the measurement lands
+    st.posAtStart = SHUTTER_POS_UNKNOWN;
+    st.target = -1;
+    st.stopAtMs = 0;
+    st.pendingMove = false;
+    st.goingDown = goingDown;
+    st.moving = true;
+    ESP_LOGI(TAG, "%s: calibrating %s - stopwatch started", chName(channel), goingDown ? "DOWN" : "UP");
+    return;
+  }
+
   // Not calibrated: there is nothing to interpolate, so report the end position
   // at once. That is exactly what the firmware did before position tracking
   // existed, and it keeps a channel usable without a calibration run.
@@ -191,6 +220,10 @@ void shutterPosSetup() {
     shutter[i].moving = false;
     shutter[i].goingDown = false;
     shutter[i].pendingMove = false;
+    calib[i].active = false;
+    calib[i].measuring = false;
+    calib[i].down = false;
+    calib[i].startMs = 0;
   }
   ESP_LOGI(TAG, "position tracking ready - %d channels, position unknown until a shutter reaches an end-stop", CH_COUNT);
 }
@@ -212,6 +245,13 @@ void shutterPosCyclic() {
     s_shutterState &st = shutter[ch];
 
     if (!st.moving) {
+      continue;
+    }
+
+    // A calibration run must reach the end-stop and be ended by the operator.
+    // Settling it here on an old travel time - or on the fallback for a channel
+    // that has none - would cut the measurement short.
+    if (calib[ch].active) {
       continue;
     }
 
@@ -375,6 +415,115 @@ void shutterPosNotifyStop(uint8_t channel) {
   settleAt(channel, estimatePos(channel));
   ESP_LOGI(TAG, "%s: stopped at an estimated %d%%", chName(channel), st.pos);
 }
+
+/**
+ * *******************************************************************
+ * @brief   begin measuring one full travel
+ * @details sends the move; the stopwatch starts when the telegram goes out
+ * @param   channel, downwards
+ * @return  true if the run was started
+ * *******************************************************************/
+bool shutterCalibStart(uint8_t channel, bool downwards) {
+
+  if (channel >= CH_COUNT) {
+    return false;
+  }
+  if (calib[channel].active) {
+    ESP_LOGW(TAG, "%s: a calibration run is already in progress", chName(channel));
+    return false;
+  }
+
+  // Stop anything already running first, otherwise the stopwatch would start
+  // part way through a travel and measure less than a full one.
+  if (shutter[channel].moving) {
+    jaroStopNow(channel);
+    settleAt(channel, estimatePos(channel));
+  }
+
+  calib[channel].active = true;
+  calib[channel].measuring = false;
+  calib[channel].down = downwards;
+  calib[channel].startMs = 0;
+
+  jaroCmd(downwards ? CMD_DOWN : CMD_UP, channel);
+  ESP_LOGI(TAG, "%s: calibration %s requested", chName(channel), downwards ? "DOWN" : "UP");
+  return true;
+}
+
+/**
+ * *******************************************************************
+ * @brief   end the measurement and store it
+ * @details call this only once the shutter has visibly reached the end-stop -
+ *          the firmware cannot tell, the receiver reports nothing
+ * @param   channel
+ * @return  measured travel in milliseconds, 0 if it was rejected
+ * *******************************************************************/
+uint32_t shutterCalibFinish(uint8_t channel) {
+
+  if (channel >= CH_COUNT || !calib[channel].active) {
+    return 0;
+  }
+  if (!calib[channel].measuring) {
+    // the telegram never went out - nothing was measured
+    ESP_LOGW(TAG, "%s: calibration ended before it started", chName(channel));
+    shutterCalibAbort(channel);
+    return 0;
+  }
+
+  uint32_t measured = millis() - calib[channel].startMs;
+  bool down = calib[channel].down;
+
+  if (measured < CALIB_MIN_TRAVEL_MS || measured > CALIB_MAX_TRAVEL_MS) {
+    // Deliberately not stored. A mis-click would otherwise become the reference
+    // for every later positioning on this channel, and a travel time of a few
+    // hundred milliseconds makes every move look instantaneous.
+    ESP_LOGE(TAG, "%s: measured %lu ms - outside %lu..%lu, discarded", chName(channel), (unsigned long)measured,
+             (unsigned long)CALIB_MIN_TRAVEL_MS, (unsigned long)CALIB_MAX_TRAVEL_MS);
+    shutterCalibAbort(channel);
+    return 0;
+  }
+
+  if (down) {
+    config.jaro.ch_travel_down[channel] = measured;
+  } else {
+    config.jaro.ch_travel_up[channel] = measured;
+  }
+
+  calib[channel].active = false;
+  calib[channel].measuring = false;
+
+  // The run ended at an end-stop, so for once the position is not an estimate.
+  settleAt(channel, down ? 0 : 100);
+  ESP_LOGI(TAG, "%s: %s travel measured as %lu ms", chName(channel), down ? "DOWN" : "UP", (unsigned long)measured);
+  return measured;
+}
+
+/**
+ * *******************************************************************
+ * @brief   cancel a calibration run
+ * @param   channel
+ * @return  none
+ * *******************************************************************/
+void shutterCalibAbort(uint8_t channel) {
+
+  if (channel >= CH_COUNT || !calib[channel].active) {
+    return;
+  }
+
+  bool wasMeasuring = calib[channel].measuring;
+  calib[channel].active = false;
+  calib[channel].measuring = false;
+
+  if (wasMeasuring) {
+    jaroStopNow(channel);
+  }
+  // Stopped part way through an unmeasured travel: the position is genuinely
+  // unknown again, and saying so beats inventing a number.
+  settleAt(channel, SHUTTER_POS_UNKNOWN);
+  ESP_LOGW(TAG, "%s: calibration aborted", chName(channel));
+}
+
+bool shutterCalibIsActive(uint8_t channel) { return (channel < CH_COUNT) && calib[channel].active; }
 
 /**
  * *******************************************************************

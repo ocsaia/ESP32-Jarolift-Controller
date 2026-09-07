@@ -70,11 +70,19 @@ path, the notify hooks including physical remotes, the MQTT `set_position`
 contract and the Home Assistant position model - which also resolved **B6**.
 Breaking: the position convention is inverted to 0 = closed, 100 = open.
 
-Still to do for F1: **calibration** (two-phase measurement, DOWN then UP) and the
-**WebUI** - a position slider on the control page and travel-time fields plus
-calibration buttons in settings. Until then travel times have to be entered by
-editing and uploading config.json. Note that WebUI work regenerates
-`include/gzip_*.h`.
+**Calibration landed** on `feat/position-calibration`, with MQTT commands so a
+channel can be measured without the WebUI:
+
+    <base>/cmd/shutter/<n>/calibrate  <-  down | up | finish | abort
+
+Still to do for F1: the **WebUI** - a position slider on the control page, and
+travel-time fields plus calibration buttons in settings. Note that WebUI work
+regenerates `include/gzip_*.h`, so expect large generated diffs.
+
+The tracker and the calibration are covered by 27 native unit tests (see
+CLAUDE.md for how to run them). The first run of the tracker suite found two
+real defects; the calibration suite passed first time, having been written
+against the lessons of that round.
 
 **F2** (per-channel and per-group timers, weekend override, twilight modes) is
 untouched. It is the larger of the two: in the fork it rewrote the timer page
