@@ -75,9 +75,19 @@ channel can be measured without the WebUI:
 
     <base>/cmd/shutter/<n>/calibrate  <-  down | up | finish | abort
 
-Still to do for F1: the **WebUI** - a position slider on the control page, and
-travel-time fields plus calibration buttons in settings. Note that WebUI work
-regenerates `include/gzip_*.h`, so expect large generated diffs.
+**F1 is complete.** The WebUI landed on `feat/position-webui`: a position slider
+per channel on the control page, and a calibration card on the service page that
+acts on the shutter already selected there.
+
+Correction to an earlier note in this file: WebUI work does **not** regenerate
+`include/gzip_*.h`. EspWebUI's build script writes its output into the library's
+own include directory under `.pio/`, which is not tracked. The tracked artefacts
+that do change are `web/output/index.html` and `web/output/user.js`.
+
+That leaves `include/gzip_css.h`, `gzip_js.h`, `gzip_login_html.h`,
+`gzip_m_html.h` and `gzip_ntp_html.h` as dead files - 270 kB of committed
+leftovers from before the WebUI was extracted into EspWebUI, dated March 2025 and
+included by nothing. Worth deleting.
 
 The tracker and the calibration are covered by 27 native unit tests (see
 CLAUDE.md for how to run them). The first run of the tracker suite found two

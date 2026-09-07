@@ -26,6 +26,42 @@ const user_translations = {
     de: "setze Schatten",
     en: "set shade",
   },
+  calibration: {
+    de: "Kalibrierung",
+    en: "Calibration",
+  },
+  info_calibration: {
+    de: "Misst die volle Fahrzeit einer Richtung. Rollladen zuerst an das andere Ende fahren, dann Start druecken und warten, bis der Rollladen am Endanschlag sichtbar steht - erst dann Fertig druecken. Zu frueh beendet, ist die gespeicherte Fahrzeit zu kurz und jede spaetere Positionierung im gleichen Verhaeltnis falsch.",
+    en: "Measures the full travel time of one direction. Move the shutter to the opposite end first, then press start and wait until it has visibly stopped at the end-stop - only then press finish. Finishing early stores a travel time that is too short, and every later positioning is wrong in the same proportion.",
+  },
+  calib_start_down: {
+    de: "Kalibrierung starten - ab",
+    en: "start calibration - down",
+  },
+  calib_start_up: {
+    de: "Kalibrierung starten - auf",
+    en: "start calibration - up",
+  },
+  calib_finish: {
+    de: "Fertig - Fahrzeit speichern",
+    en: "finish - store travel time",
+  },
+  calib_abort: {
+    de: "Abbrechen",
+    en: "abort",
+  },
+  calib_idle: {
+    de: "keine Kalibrierung aktiv",
+    en: "no calibration running",
+  },
+  travel_down: {
+    de: "Fahrzeit ab",
+    en: "travel time down",
+  },
+  travel_up: {
+    de: "Fahrzeit auf",
+    en: "travel time up",
+  },
   learn: {
     de: "anlernen",
     en: "learn",
