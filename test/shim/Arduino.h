@@ -22,6 +22,10 @@
 typedef uint8_t byte;
 typedef bool boolean;
 typedef unsigned int word;
+// mqtt.h declares one function taking an Arduino String. Nothing under test
+// calls it, so the alias only has to make the declaration compile.
+#include <string>
+typedef std::string String;
 
 // Same value the Arduino core defines. Dusk2Dawn converts between degrees and
 // radians with it.

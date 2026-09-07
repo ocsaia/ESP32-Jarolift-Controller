@@ -40,7 +40,8 @@ With a host compiler on PATH, `sh test/run_native_tests.sh` does the same, and
 `pio test -e native` works too.
 
 `test/shim/` holds the stand-ins: a clock the test drives itself, no-op log
-macros and GPIO, an in-memory LittleFS, and replacements for `basics.h` and
+macros and GPIO, an in-memory LittleFS, a recording AsyncMqttClient, and
+replacements for `basics.h` and
 `EspStrUtil` (the real ones pull in WiFi and friends, and `EspStrUtil.h` cannot
 be compiled on the host at all - it declares `intToString(int)` and
 `intToString(int32_t)`, which are two functions on xtensa and one on x86). Every

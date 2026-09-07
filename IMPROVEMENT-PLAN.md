@@ -144,6 +144,21 @@ producing twenty-four subtly broken copies. Edit block 0, then run it.
   under another cannot pass. Verified by mutation - four deliberate breaks in
   config.cpp were each caught, including a dropped `TIMER_COUNT` bound that the
   sanitizers reported at the exact source line.
+- **The MQTT command dispatch is tested** (E8): 30 native tests over
+  `mqttHandleCommand()`, the surface Home Assistant actually drives. Two of them
+  exist to hold down the aliasing invariant the source warns about - `addTopic()`
+  returns one static buffer, so the shutter prefix is destroyed when the group
+  prefix is built, and only the order of the four lines makes it correct.
+  Verified by mutation: performing exactly the tidy-up the comment forbids makes
+  every shutter topic stop matching, and the suite says so immediately.
+
+  Two dead branches turned up while writing them. `checkJaroCmd()` already
+  range-checks and returns -1, so `mqttHandleCommand()`'s own
+  `if (channel >= 1 && channel <= 16)` is always true and the `else` that would
+  answer "invalid channel" is unreachable - likewise "invalid group". A user who
+  addresses `/cmd/shutter/17` gets "unknown topic" instead. The tests pin the
+  behaviour that exists; making the better message reachable is a behaviour
+  change and has not been done.
 - **The WebUI simulator is published** to
   <https://ocsaia.github.io/ESP32-Jarolift-Controller/> from the `gh-pages`
   branch. It is driven by `sim.json` with no radio and no MQTT, so it proves
@@ -433,6 +448,7 @@ do.
 | E5 | No continuous integration. Nothing stopped a change that only builds on one target, and the native tests had to be remembered. |
 | E6 | Anyone with push rights, including the agent, could write straight to `main`, and there was no way to see the WebUI without flashing hardware. |
 | E7 | Nothing checked that `configSaveToFile()` and `configLoadFromFile()` agree, and nothing checked what an older config file turns into on upgrade - the one path every existing device takes. |
+| E8 | Nothing checked the MQTT command dispatch - the interface Home Assistant drives - including an aliasing invariant that only a source comment protected. |
 
 Baseline measurements (`pio run -e esp32`, after the E1 fix):
 
