@@ -216,8 +216,19 @@ void shutterPosCyclic() {
     }
 
     if (st.stopAtMs == 0) {
-      // running to an end-stop: the position is only settled once a full travel
-      // has elapsed, and then it is known exactly rather than estimated
+      // Running to an end-stop. estimatePos() cannot decide when we get there
+      // if the start position was unknown - it returns SHUTTER_POS_UNKNOWN,
+      // which compares as -1: that read as "already closed" on the very first
+      // pass of a DOWN run, and as "never open" for the whole of an UP run.
+      // With no starting point the only guarantee is a full travel time.
+      if (st.posAtStart == SHUTTER_POS_UNKNOWN) {
+        if ((millis() - st.startMs) >= travelTime(ch, st.goingDown)) {
+          settleAt(ch, st.goingDown ? 0 : 100);
+          ESP_LOGI(TAG, "%s: %s - position known again", chName(ch), st.goingDown ? "closed" : "open");
+        }
+        continue;
+      }
+
       int8_t est = estimatePos(ch);
       if (st.goingDown && est <= 0) {
         settleAt(ch, 0);
@@ -269,6 +280,19 @@ bool shutterPosSetTarget(uint8_t channel, uint8_t targetPct) {
   // estimate already says we are there, because it is the only way to
   // resynchronise an estimate that has drifted.
   if (st.pos == targetPct && !st.moving && targetPct != 0 && targetPct != 100) {
+    return true;
+  }
+
+  // Already there and still running: stop, do not reverse. The direction test
+  // below is "is the target below me", which is false when the target IS the
+  // current position - so without this the shutter would be sent upwards and
+  // only pulled back by the span guard, after a pointless telegram and a small
+  // overshoot.
+  if (st.moving && st.pos == targetPct && targetPct != 0 && targetPct != 100) {
+    st.stopAtMs = 0;
+    jaroStopNow(channel);
+    settleAt(channel, st.pos);
+    ESP_LOGI(TAG, "%s: already at %d%% - stopping", chName(channel), targetPct);
     return true;
   }
 
