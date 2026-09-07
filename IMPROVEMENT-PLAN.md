@@ -84,10 +84,11 @@ Correction to an earlier note in this file: WebUI work does **not** regenerate
 own include directory under `.pio/`, which is not tracked. The tracked artefacts
 that do change are `web/output/index.html` and `web/output/user.js`.
 
-That leaves `include/gzip_css.h`, `gzip_js.h`, `gzip_login_html.h`,
-`gzip_m_html.h` and `gzip_ntp_html.h` as dead files - 270 kB of committed
-leftovers from before the WebUI was extracted into EspWebUI, dated March 2025 and
-included by nothing. Worth deleting.
+Those dead `include/gzip_*.h` files have been deleted. Two of them shared a name
+with a header EspWebUI generates, so it was worth checking which one the build
+actually used: deleting all five leaves the firmware byte-identical after a
+clean rebuild, which proves the library's copies were always the ones compiled
+and no stale page was ever served.
 
 The tracker and the calibration are covered by 27 native unit tests (see
 CLAUDE.md for how to run them). The first run of the tracker suite found two
@@ -111,9 +112,15 @@ against the lessons of that round.
   uses was considered and rejected - it buys no capability, spends ~2.5 kB of RAM
   on slots that stay empty, and needs a migration.
 
-Still to do for F2:
-
-1. **Weekend override** - a separate time or astro event for Saturday and Sunday.
+**F2 is complete.** The weekend override was considered and deliberately skipped:
+every timer already has independent per-day flags with checkboxes in the UI, so
+a different weekend schedule is two timers - weekdays on one, Saturday and
+Sunday on the other - and there are twenty-four slots. Building it in would cost
+about 336 bytes of RAM and a second, near-identical set of controls in each of
+the twenty-four blocks, for convenience rather than capability. The real
+downside of the two-timer approach is that the channel mask and command have to
+be set in both places; if that becomes annoying in practice the decision is
+worth revisiting.
 
 `scripts/gen_timer_blocks.py` regenerates the timer page from its first block.
 It verifies the substitution against every block that already exists before
