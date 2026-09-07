@@ -22,7 +22,13 @@ TODO.txt
 # credentials. This fork is public. Anchored to the root on purpose: the
 # tracked web/output/config.json is the simulator's dummy file and must stay
 # tracked.
-/config.json
+#
+# Every root-level .json, not just the one obvious name: the first version of
+# this rule matched /config.json alone, and the very next file to arrive was
+# config_after-upgrade.json, which slipped straight past it. The repository
+# tracks no .json at its root, so there is nothing to lose by covering all of
+# them - and a config pulled off a device rarely keeps its original name.
+/*.json
 
 # Full or partial flash dumps taken with esptool before flashing. Same secrets,
 # plus the NVS rolling counter.
