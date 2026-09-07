@@ -151,6 +151,73 @@ producing twenty-four subtly broken copies. Edit block 0, then run it.
   interface without flashing a device, and everything Phase 2 added to the pages
   was until then compile-checked only.
 
+**Phase 4 - verified on hardware.** Everything above this line was reasoning,
+compiling and tests. On 2026-09-07 the live controller - an ESP-WROOM-32
+(ESP32-D0WD-V3) on a CH340 board, 4 MB, base serial 0 - was flashed over serial
+and driven for real. What follows are measurements, not estimates.
+
+*Upgrading.* The device came from v1.9.0 with a **V2** config. It migrated to V5
+on the first boot with nothing lost: base serial, master keys, all sixteen
+channel names, all sixteen remotes, six groups and every subsystem section came
+back byte-identical, confirmed by diffing a config export taken before the flash
+against one taken after. The NVS rolling counter (5368) survived, as the
+partition layout predicted it would. The encrypted WiFi and MQTT passwords
+round-tripped unchanged, which the native tests could not check - their
+EspStrUtil stand-in is not AES.
+
+*F1 works.* First real measurements, on a single shutter:
+
+| | |
+|---|---|
+| DOWN travel | 26 356 ms |
+| UP travel | 27 015 ms |
+| timed stop fired | **46, 47, 47 ms** after its deadline, three runs |
+| position error, plain move | 0.4 % |
+| position error, retargeted mid-flight | 0.62 % |
+| MQTT message to radio | ~470 ms, of which ~234 ms is the transmission |
+
+The arithmetic was exact every time: 100 % -> 50 % planned 13 178 ms against a
+measured 26 356 ms travel, and an UP leg correctly used the UP travel time
+rather than the DOWN one. A mid-flight retarget moved the deadline without
+restarting the motor, which is the failure the native tests caught before any of
+this ran.
+
+The 46-47 ms is the loop() jitter, and it is worth keeping as a reference: it is
+that small only because shutterPosCyclic() runs every pass rather than on a
+timer. Anyone restructuring loop() can measure against it.
+
+*Two findings that only hardware could produce.*
+
+- **UP_FACTOR is far too pessimistic here.** The fallback for a channel
+  calibrated in one direction only assumes UP is 20 % slower than DOWN
+  (`12/10`). Measured on this installation: **2.5 %**. The fallback would
+  predict 31 627 ms against 27 015 actual, a 17 % error, so a single 50 %
+  positioning would overshoot by more than two seconds. This is one shutter and
+  the constant has not been changed on the strength of it - but it is the only
+  real number anyone has, and it says the "calibrate one direction" path is
+  much weaker on this hardware than the constant implies.
+- **A retarget quantises to whole percent.** `estimatePos()` divides in
+  integers, so each mid-flight retarget banks a position up to 1 % off and the
+  error accumulates over repeated retargets. One retarget cost 0.62 %. A run to
+  either end-stop re-anchors it, and at 26 s of travel 1 % is 264 ms, so this is
+  documentation rather than a defect.
+
+*Still unverified, and why.* The watchdog margin - a 234 ms transmission never
+approaches the 10 s limit, so nothing has yet exercised the fix; it needs a long
+service command or a group command whose timed stops land in one pass. The
+remote-press path needs a wall remote pressed with the broker stopped. The
+command queue under a Home Assistant restart with retained commands, and the
+retained-discovery cleanup, are both untouched.
+
+*Open design question.* SHADE does not update the tracker on either path - the
+remote handler and processJaroCommands() both publish POS_SHADE to MQTT and
+leave the estimate where it was. Home Assistant then shows 10 % while the
+tracker believes something else, and the next position command computes from the
+wrong base. The shade point is stored in the receiver and the controller cannot
+know where it is, so the choice is between settling the estimate at POS_SHADE
+and marking it unknown so the next move has to reach an end-stop first. Neither
+is obviously right, which is why it is written down rather than fixed.
+
 ---
 
 ## A. Crash / memory corruption (P0)
