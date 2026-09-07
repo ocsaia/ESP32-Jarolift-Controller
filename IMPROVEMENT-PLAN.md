@@ -104,13 +104,21 @@ against the lessons of that round.
   building. Config version 3 -> 4; a missing key reads as 0, which is the
   previous behaviour, so no migration step is needed.
 
-Still to do for F2, in order:
+- **Timer count 6 -> 24** landed on `feat/more-timers`, with the page and the
+  twilight selector. Per-channel scheduling did not need a schema change: every
+  timer already carries a 16 bit channel mask, so the capability was there and
+  only the capacity was missing. The per-channel/per-group schema the other fork
+  uses was considered and rejected - it buys no capability, spends ~2.5 kB of RAM
+  on slots that stay empty, and needs a migration.
 
-1. **Per-channel and per-group timers** - the big schema change. Today there are
-   six global timers with a group mask; the target is an independent UP/DOWN
-   schedule per channel and per group, with a migration from the existing six.
-2. **Weekend override** - a separate time or astro event for Saturday and Sunday.
-3. **WebUI** for both.
+Still to do for F2:
+
+1. **Weekend override** - a separate time or astro event for Saturday and Sunday.
+
+`scripts/gen_timer_blocks.py` regenerates the timer page from its first block.
+It verifies the substitution against every block that already exists before
+writing anything, so a token that is still hard-coded aborts the run instead of
+producing twenty-four subtly broken copies. Edit block 0, then run it.
 
 ---
 

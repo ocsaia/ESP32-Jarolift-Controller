@@ -36,6 +36,16 @@ struct s_cfg_jaro {
   uint16_t remote_mask[16];
 };
 
+/*
+ * How many independent schedules exist. Each one already carries a 16 bit
+ * channel mask, so a single timer can address one shutter, several, or all of
+ * them - the capability was never the limit, the count was. Sixteen channels
+ * with an independent up and down time need thirty-two, which is more config
+ * than most installations will ever use; twenty-four covers a full house with
+ * room to spare and costs about a kilobyte of RAM.
+ */
+#define TIMER_COUNT 24
+
 struct s_cfg_timer {
   bool enable;          // Timer enable
   uint8_t type;         // 0 = fixed time, 2 = sunrise, 3 = sunset
@@ -142,7 +152,7 @@ struct s_config {
   s_cfg_auth auth;
   s_cfg_log log;
   s_cfg_jaro jaro;
-  s_cfg_timer timer[6];
+  s_cfg_timer timer[TIMER_COUNT];
   s_cfg_geo geo;
 };
 

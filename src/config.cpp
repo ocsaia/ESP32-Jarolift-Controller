@@ -12,8 +12,9 @@
  * V2: Added min/max times for timers.
  * V3: Added per-channel travel times for time-based position control.
  * V4: Added twilight modes for astro timers.
+ * V5: Timer count raised from 6 to TIMER_COUNT.
  */
-const int CFG_VERSION = 4;
+const int CFG_VERSION = 5;
 
 char filename[24] = {"/config.json"};
 bool setupMode;
@@ -254,7 +255,7 @@ void configInitValue() {
   config.gpio.led_setup = LED_BUILTIN;
 
   // timer
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < TIMER_COUNT; i++) {
     config.timer[i].use_min_time = false;
     config.timer[i].use_max_time = false;
     strncpy(config.timer[i].min_time_value, "", sizeof(config.timer[i].min_time_value));
@@ -407,7 +408,7 @@ void configSaveToFile() {
   }
 
   JsonArray timers = doc["timer"].to<JsonArray>();
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < TIMER_COUNT; i++) {
     JsonObject timer = timers.add<JsonObject>();
     timer["enable"] = config.timer[i].enable;
     timer["type"] = config.timer[i].type;
@@ -609,7 +610,10 @@ void configLoadFromFile() {
     }
 
     JsonArray timers = doc["timer"].as<JsonArray>();
-    for (size_t i = 0; i < timers.size() && i < 6; i++) { // Schleife über die Timer
+    // An older config carries fewer entries; timers.size() stops the loop and the
+    // remaining slots keep their zero-initialised defaults, which read as
+    // "disabled". Nothing has to be migrated.
+    for (size_t i = 0; i < timers.size() && i < TIMER_COUNT; i++) {
       JsonObject timer = timers[i];
       config.timer[i].enable = timer["enable"];
       config.timer[i].type = timer["type"];
