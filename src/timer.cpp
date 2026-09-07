@@ -312,7 +312,7 @@ void timerCyclic() {
     lastProcessedTime = now;
 
     // check all timer
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < TIMER_COUNT; i++) {
       if (config.timer[i].enable) {
         // check if day is enabled
         if (isDayEnabled(config.timer[i], dti.tm_wday)) {
