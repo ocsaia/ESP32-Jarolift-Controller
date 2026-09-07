@@ -5,6 +5,12 @@ on:
     branches:
       - main
 
+# actions-gh-pages pushes the built site to the gh-pages branch. The default
+# GITHUB_TOKEN is read-only, so without this the deploy step fails on every
+# push to main - which is what it had been doing on this fork.
+permissions:
+  contents: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
