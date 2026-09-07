@@ -51,17 +51,16 @@ not claim runtime behaviour was verified.
 Known environment issue: on the current Windows machine `esp32c3` fails with
 `riscv32-esp-elf-g++: fatal error: cannot execute '.../as.exe': CreateProcess:
 No such file or directory`, even though that assembler exists and runs when
-invoked directly. It reproduces on unmodified upstream code, affects every
-translation unit, and is a toolchain/OS problem rather than a source problem -
-reinstall `toolchain-riscv32-esp` to fix it. Verify changes on `esp32`,
-`esp32s2` and `esp32s3`.
+invoked directly. **Confirmed local**: the same commit builds esp32c3 green in
+CI on Linux, so nothing is wrong with the source - reinstall
+`toolchain-riscv32-esp` to fix it locally. Verify changes on `esp32`, `esp32s2`
+and `esp32s3` here, and let CI cover esp32c3.
 
 Continuous integration runs the same two things on every pull request
 (`.github/workflows/build_and_test.yml`): the native tests, and a build of
 esp32, esp32s2, esp32s3 and esp32s3_16mb with a check that project sources stay
-warning-free. esp32c3 builds in a separate informational job that cannot block a
-merge, because that target has never been verified anywhere - see the known
-environment issue above.
+warning-free. All five environments are built, esp32c3 included - it works in CI even
+though it cannot be built locally.
 
 ## Things that will bite you
 

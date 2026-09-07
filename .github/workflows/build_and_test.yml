@@ -46,7 +46,7 @@ jobs:
         run: sh test/run_native_tests.sh
 
       - name: Build firmware
-        run: pio run -e esp32 -e esp32s2 -e esp32s3 -e esp32s3_16mb 2>&1 | tee build.log
+        run: pio run -e esp32 -e esp32s2 -e esp32s3 -e esp32s3_16mb -e esp32c3 2>&1 | tee build.log
 
       # The project is warning-free; a new warning in src/ or lib/ is a
       # regression rather than noise. Framework and library warnings are not ours.
@@ -57,29 +57,3 @@ jobs:
             exit 1
           fi
           echo "no warnings from project sources"
-
-  esp32c3:
-    name: esp32c3 (informational)
-    runs-on: ubuntu-latest
-    # Deliberately not allowed to block a merge. This target cannot be built on
-    # the maintainer's Windows machine - the RISC-V toolchain fails to spawn its
-    # assembler there, on unmodified upstream code too - so it has never been
-    # verified. Running it here finds out whether that really is local, without
-    # putting an unverified target in the way of every pull request. If it goes
-    # green consistently, fold it into the job above and drop this one.
-    continue-on-error: true
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install PlatformIO
-        run: pip install --upgrade platformio
-
-      - name: Build esp32c3
-        run: pio run -e esp32c3
