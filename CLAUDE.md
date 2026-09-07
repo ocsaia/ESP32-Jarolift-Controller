@@ -29,17 +29,15 @@ Modules that are pure logic have native unit tests under `test/`. They are worth
 running and worth extending - the position tracker's first run found a real bug
 that compiling could never have shown.
 
-```bash
-pio test -e native          # needs a host compiler (gcc/clang) on PATH
-```
-
-This machine has no host compiler, so use a container instead - it needs nothing
-installed on Windows and is what CI would run:
+This machine has no host compiler, so run them in a container - it needs nothing
+installed on Windows and is what CI would use:
 
 ```bash
-docker run --rm -v "$PWD:/w" -w /w gcc:13 sh -c '
-  g++ -std=gnu++17 -I test/shim -I include -I .pio/libdeps/esp32/Unity/src       test/test_shutterpos/test_shutterpos.cpp       .pio/libdeps/esp32/Unity/src/unity.c -o /tmp/t && /tmp/t'
+docker run --rm -v "$PWD:/w" -w /w gcc:13 sh test/run_native_tests.sh
 ```
+
+With a host compiler on PATH, `sh test/run_native_tests.sh` does the same, and
+`pio test -e native` works too.
 
 `test/shim/Arduino.h` fakes the small surface those modules touch: a clock the
 test drives itself, and no-op log macros. Keep it minimal, so it stays obvious
