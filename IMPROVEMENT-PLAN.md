@@ -237,44 +237,71 @@ leads nowhere either. The invalid-channel message from the same batch is still
 unchecked; a publish to `<base>/cmd/shutter/17` should now answer
 "invalid channel" on `<base>/message`.
 
-*Open: the live device receives nothing from a wall remote.* Reported as Home
-Assistant keeping one direction disabled: a shutter raised with a wall remote
-still shows as closed, because HA only ever hears about moves it issued itself.
-Pressing the remote produces no "received remote signal" line at all, and that
-line is written before the remote is looked up - so no frame is completing, not
-merely going unrecognised. Reading the RX path against upstream found nothing:
-the ISR is equivalent apart from the A1 bounds, frame detection and decoding are
-the same, every transmit path re-arms reception, begin() arms it, and the radio
-driver is untouched. Whether reception ever worked on this hardware is not
-known yet.
+*Wall remotes did not reach Home Assistant - resolved.* Reported as HA keeping
+one direction disabled: a shutter raised with a wall remote still showed as
+closed, because HA only ever heard about moves it had issued itself.
 
-That is what the runtime radio diagnostics are for - see below. What the
-per-second line should reveal: `edges=0` means nothing reaches GDO2 (wiring, or
-a chip whose registers no longer hold the configuration); edges with `sync=0`
-means nothing frame-shaped arrives; syncs with `frames=0` and a high `max` or
-`part` count points at the frame being extended by noise until it no longer
-fits 65..75 pulses - a data pulse is anything low for 300..1000 us, and a noisy
-band supplies plenty; `lost>0` means frames complete but loop() is too slow to
-take them before the next frame overwrites them.
+The first reading was that nothing was received at all, and the RX path was
+checked against upstream on that basis without finding a cause. The runtime
+radio diagnostics settled it on 2026-09-26, and reception was never the
+problem. The chip read back as configured (RX state, IOCFG2 0x0D, PKTCTRL0 0x32,
+ASK/OOK, IRQ armed); at rest GDO2 carried 1500-5500 noise edges a second with
+RSSI around -95 dBm and no frames; with the channel 7 remote held, RSSI rose to
+about -38 dBm and two to three frames a second decoded as
+`serial: 0x001a4a06 | cmd: UP | channel: ... 01000000`. The earlier empty log
+was most likely the WebUI log page, which only reloads on its refresh button.
 
-Found on the way, recorded rather than acted on where it is not the fault:
+The fault was the lookup. mqttSendRemote() compared `serial >> 8` with the
+table, at most 20 bits for a 28-bit KeeLoq serial, while the table held the
+serial exactly as the log prints it - `1a4a06`, 21 bits. Nothing could match,
+every press was reported as an unknown remote, and the tracker was never told.
+The handset turns out to carry a serial per channel (`0x1a4a00` + channel),
+which the prefix scheme would have folded onto a single entry even if it had
+been entered that way. The lookup now tries the full serial first and
+upstream's prefix second (`src/remoteMatch.cpp`, native tests in
+`test/test_remote`), and the settings page says which form to enter. The first
+review of this table had suggested filling the gap at row 0 with `1a4a00`
+without noticing that the whole pattern could not match.
+
+Fixing the lookup alone would have exposed a second problem: a held button
+repeats its frame several times a second, and each frame re-based the tracker's
+estimate - banked in whole percent every time, and with an unknown start the
+end-stop timer restarted on every frame. The tracker is now told once per press
+(same serial, same function, frames less than a second apart), and a long STOP
+that the radio library turns into SHADE stays one press, so the STOP frames
+after it cannot overwrite the shade position just published.
+
+Seen in the same capture, not yet acted on:
+
+- **Frames are taken at 65 pulses.** processRxData() accepts 65..75 and takes
+  the frame the moment the count reaches 65, but this remote sends 73 (sync,
+  32 hop, 28 serial, 4 function, 8 group bits). The last eight - the high byte
+  of the channel mask, channels 9-16 - have not arrived yet and decode as
+  whatever the buffer held: the capture shows `11111111`, `00000000` and
+  `00000001` for the same button. Upstream has the same fault. The tracker does
+  not use that field; the MQTT status telegram does.
+- **No integrity check.** One frame decoded as `serial: 0x00349a06 | cmd: 0x0`
+  - a noise-damaged frame accepted as genuine. This firmware's own transmit
+  side puts the serial's low byte into the encrypted word
+  (`disc << 16 | counter`, with that byte in `disc`). If the remotes do the
+  same, it is a cheap check that a frame decrypted with this master key and
+  was not damaged - to be confirmed against real frames before relying on it.
+- **Half the frames are lost** (`lost=3..5` per second while held). After every
+  decoded frame loop() spends about 270 ms in `delay(50)`, a recalibration and
+  `delay(200)`, during which complete frames arrive and are overwritten. The
+  remote repeats, so a press still gets through, but loop() is blocked for all
+  of it.
+
+Found earlier while reading the RX path, recorded rather than acted on:
 
 - Every CC1101 register access costs 10 ms (`wait_Miso()` is `delay(10)`).
   Now in CLAUDE.md.
 - The carrier is 433.945 MHz (`FREQ0 = 0xB0`), not Jarolift's 433.92. The
   channel filter is about 271 kHz wide (`MDMCFG4 = 0x69`), so 25 kHz is well
-  inside it - not the cause.
+  inside it - and frames decode, so it is not a fault.
 - `getRssi()` added the 74 dB offset on both branches, so anything stronger
-  than -74 dBm read as weaker than the noise floor. Nothing displayed it; it is
-  corrected as part of the diagnostics, which are its first consumer.
-- The remote table on the live device can never match, independently of
-  reception. mqttSendRemote() compares `serial >> 8`, at most 20 bits for the
-  28-bit KeeLoq serial; the stored entries are values like `0x1a4a06`, 21 bits.
-  They look like the per-channel serials of a multi-channel handset
-  (`0x1a4a00` + channel), which the `>> 8` scheme would fold onto a single
-  entry anyway. To be fixed once frames arrive and the real serials can be
-  seen - the first review of this table suggested filling the gap at row 0 with
-  `1a4a00` without noticing the whole pattern cannot match.
+  than -74 dBm read as weaker than the noise floor. Corrected with the
+  diagnostics, its first consumer.
 
 *Runtime radio diagnostics.* Off at every boot, never persisted, switched from
 the service page or with `radio diag on|off` over telnet; it switches itself
