@@ -308,6 +308,15 @@ Seen in the same capture, not yet acted on:
   than as a previous frame's leftover. The same timing may be why upstream
   accepted a range rather than one length - the group byte it then read from
   index 72 was never there.
+
+  Confirmed on the device: the channel 7 remote reports
+  `00000000 01000000`, and a channel 12 remote (serial `0x1a4a0b`) reports
+  `00001000 00000000` - bit 11, channel 12, from the paired group bits that
+  used to decode as noise. The eighth bit's recovery from its high half is
+  covered by the tests only; this installation has no channel 16. The same
+  capture rejected another misaligned frame: `0x349417` is `0x1a4a0b` shifted
+  left by one bit with a 1 carried in, at 73 pulses - the only 73-pulse frames
+  seen so far have all been misaligned ones.
 - ~~**No integrity check**~~ - fixed, and it turned out to matter more than it
   looked. After the loop() stall was removed, frames decoded at eight to nine a
   second against eight to nine sync pulses, and `lost` fell from three to five
@@ -344,8 +353,10 @@ Seen in the same capture, not yet acted on:
   throttled the log and the status telegram, which now go out once per press,
   repeats at debug level only. The same review found SHADE runs keyed on the
   whole channel mask, whose high byte is decoded before it arrives and changes
-  between frames of one press - so a held STOP could miss its SHADE. Runs are
-  keyed on the low byte now.
+  between frames of one press - so a held STOP could miss its SHADE. Runs were
+  keyed on the low byte until frames were taken whole; with the high byte
+  reliable again they use the full mask. A three-second STOP has not been tried
+  on the device yet.
 
 Found earlier while reading the RX path, recorded rather than acted on:
 
@@ -367,6 +378,29 @@ filter bandwidth - and then one line per second of ISR counters. `radio status`
 prints the same read-back on demand without disturbing the counters. The ISR
 counts unconditionally; it is a few increments per edge, cheaper than a branch
 on whether anyone is listening.
+
+Its lines are kept inside the roughly 92 characters a WebUI log entry leaves
+for the message once the date and the level/tag prefix are in
+(`LOG_MESSAGE_BUDGET`): the per-second line lists `bad`, `lost`, `part` and
+`ovf` only when they are not zero, and the on-demand counters are two lines.
+The first version lost the tail of its counters line exactly that way; on the
+device the two lines now come out whole. Worth knowing when debugging with it:
+the diagnostics switch themselves off, but the log level is part of the config
+and survives a restart - set it back to INFO afterwards.
+
+*Open: WebUI "no connection".* Seen on 2026-09-26 between 17:34 and 17:36:
+four WebSocket disconnects in three minutes, with DEBUG logging and the radio
+diagnostics on. One was followed a second later by the device itself logging
+`WiFi-Disconnected`; the link measured -71 dBm (58 %) with the controller on
+the desk. ESPAsyncWebServer closes a client once 32 messages are queued for it
+(`closeWhenFull`, on by default), which a stalled link reaches, and the log
+refresh sends up to 16 KB in a single message - so a weak link and a full
+DEBUG log together can plausibly do it. A later two-minute window had none,
+and the user had not seen it before; whether the page had been reloaded
+after each flash is not known. Not
+attributed to the firmware; being watched with INFO logging and the page
+reloaded after each flash. If it persists, turning `closeWhenFull` off would
+drop stale messages instead of the client - a mitigation, not a cause.
 
 *Open design question.* SHADE does not update the tracker on either path - the
 remote handler and processJaroCommands() both publish POS_SHADE to MQTT and
