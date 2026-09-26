@@ -489,8 +489,10 @@ void JaroliftController::takeRxDiagnostics(RxDiagnostics &out, bool reset) {
   portEXIT_CRITICAL(&rxMux_);
 
   out.frames = diagFrames_;
+  out.rejected = diagRejected_;
   if (reset) {
     diagFrames_ = 0;
+    diagRejected_ = 0;
   }
   out.irqArmed = rxIrqAttached_;
 }
@@ -1162,6 +1164,20 @@ void JaroliftController::processRxData() {
 
   rxKeyGen();
   uint32_t decoded = rxDecode();
+
+  // Drop damaged and foreign frames here, before they reach the long-press
+  // detection or the application - see FrameCheck.h for why this is needed and
+  // what it checks. Counted, so the diagnostics show it at work, and so a wrong
+  // assumption would show too: frames arriving, every one of them rejected.
+  if (!FrameCheck::valid(rxSerial_, rxFunction_, decoded)) {
+    diagRejected_++;
+    ESP_LOGD(TAG, "frame rejected | serial: 0x%08lx | fn: 0x%x | serial byte in hop: 0x%02x, expected 0x%02x", (unsigned long)rxSerial_,
+             (unsigned)rxFunction_, (unsigned)((decoded >> 16) & 0xFF), (unsigned)(rxSerial_ & 0xFF));
+    rxDiscH_ = 0;
+    rxHopCode_ = 0;
+    rxFunction_ = 0;
+    return;
+  }
 
   // build channel information
   uint8_t ch_low = (decoded >> 24) & 0xFF;

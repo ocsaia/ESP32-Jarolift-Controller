@@ -31,6 +31,9 @@ typedef std::string String;
 // radians with it.
 #define PI 3.1415926535897932384626433832795
 
+// The KeeLoq library's only use of the core. Same definition the core has.
+#define bitRead(value, bit) (((value) >> (bit)) & 0x01)
+
 // ---------------------------------------------------------------------------
 // Fake clock. Tests move time explicitly - nothing here advances on its own,
 // so a test that expects a stop after 12 s does not have to wait 12 s.
