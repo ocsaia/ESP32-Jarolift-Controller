@@ -634,6 +634,7 @@ void JaroliftController::handleRadioRxMeasure() {
         pbWrite_ = 0;
         lowBuf_[pbWrite_] = (uint16_t)lowVal;
         pbWrite_++;
+        hiBuf_[pbWrite_] = 0; // see the data branch below
       } else if (lowVal < 1000) {
         // A1: pbWrite_ used to grow without any bound. A 433 MHz burst with more
         // than kPulseBufferSize pulses in the accepted range wrote straight past
@@ -649,6 +650,14 @@ void JaroliftController::handleRadioRxMeasure() {
         lowBuf_[pbWrite_] = (uint16_t)lowVal;
         pbWrite_++;
         timeout = currentMicros;
+        // The high half of the next bit lands in this slot when it ends. Clear
+        // it now, so a half that never arrives - or falls outside 300..1000 us -
+        // reads as absent rather than as whatever an earlier frame left there.
+        // It matters for the last bit of every frame, whose high half is the
+        // only half ever captured (FrameDecoder.h explains why).
+        if (pbWrite_ < kPulseBufferSize) {
+          hiBuf_[pbWrite_] = 0;
+        }
       }
     }
   } else { // Übergang zu LOW
@@ -1136,11 +1145,16 @@ void JaroliftController::processRxData() {
     parked = true;
   } else {
     pulseCount = pbWrite_;
-    // Only a full frame is taken while it is still in the live buffer. This
-    // used to accept anything from 65 pulses up, and with loop() running freely
-    // that meant every frame was taken at exactly 65 - before its last eight
-    // pulses, the group byte, had arrived. A frame that really is shorter is
-    // not lost by waiting: when it ends, the ISR parks it.
+    // Only a frame with every bit as a complete pulse (73) is taken while it is
+    // still in the live buffer. This used to accept anything from 65 pulses up,
+    // and with loop() running freely that meant every frame was taken at
+    // exactly 65 - before any group bit had arrived.
+    //
+    // A genuine frame is captured as 72: the low half of its last bit runs into
+    // the gap before the next frame and is never stored (see FrameDecoder.h).
+    // It must not be taken at 72 either, because the high half of that last
+    // bit - the only half of it there is - lands in the slot just after. It
+    // comes through the parked slot instead, once the ISR has seen it end.
     frameComplete = (lowBuf_[0] > 3650 && lowBuf_[0] < 4300) && (pulseCount >= FrameDecoder::kFullFrame && pulseCount <= 75);
     if (frameComplete) {
       memcpy(snapLow_, (const void *)lowBuf_, sizeof(snapLow_));
