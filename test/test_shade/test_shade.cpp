@@ -114,6 +114,19 @@ static void test_a_different_channel_byte_starts_a_new_run() {
   }
 }
 
+// Channels 9-16 of a handset with a single serial differ only in the high byte
+// of the mask. With frames now taken whole that byte is reliable, and two such
+// buttons are two runs.
+static void test_channels_differing_only_in_the_high_byte_are_separate_runs() {
+  ShadeDetector d;
+  for (uint32_t t = 0; t <= 2000; t += 200) {
+    d.update(0x1a4a00, 0x0100, STOP, 1000 + t);
+  }
+  for (uint32_t t = 0; t <= 2000; t += 200) {
+    TEST_ASSERT_EQUAL_UINT8(STOP, d.update(0x1a4a00, 0x0200, STOP, 3200 + t));
+  }
+}
+
 static void test_a_new_long_press_after_the_first_gives_a_new_shade() {
   ShadeDetector d;
   holdUntilShade(d, 0x1a4a06, 1000, 200, 3600);
@@ -141,6 +154,7 @@ int main(int, char **) {
   RUN_TEST(test_another_button_ends_the_run);
   RUN_TEST(test_another_remote_starts_its_own_run);
   RUN_TEST(test_a_different_channel_byte_starts_a_new_run);
+  RUN_TEST(test_channels_differing_only_in_the_high_byte_are_separate_runs);
   RUN_TEST(test_a_new_long_press_after_the_first_gives_a_new_shade);
   RUN_TEST(test_a_press_held_across_the_millis_wrap_still_counts);
 

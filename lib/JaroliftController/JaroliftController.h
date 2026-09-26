@@ -3,6 +3,7 @@
 #define JARO_LIFT_CONTROLLER_H
 
 #include "FrameCheck.h"
+#include "FrameDecoder.h"
 #include "KeeloqLib.h"
 #include "ShadeDetector.h"
 #include "cc1101.h"
@@ -195,6 +196,16 @@ private:
   static constexpr size_t kFrameSnapshotSize = 76;
   uint16_t snapLow_[kFrameSnapshotSize];
   uint16_t snapHi_[kFrameSnapshotSize];
+
+  // A complete frame the ISR was about to throw away - because it ended before
+  // reaching 73 pulses, or because loop() had not taken it yet - is parked here
+  // instead, for processRxData() to decode. One slot is enough: a remote repeats
+  // its frame about every 100 ms, and loop() only has to get to the slot before
+  // the next one completes. Written by the ISR under rxMux_.
+  volatile bool pendingReady_ = false;
+  volatile uint16_t pendingPulses_ = 0;
+  uint16_t pendingLow_[kFrameSnapshotSize];
+  uint16_t pendingHi_[kFrameSnapshotSize];
 
   // Empfangsdaten
   uint32_t rxSerial_;
