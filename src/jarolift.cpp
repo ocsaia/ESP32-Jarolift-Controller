@@ -395,8 +395,8 @@ static const char *modFormatName(uint8_t mdmcfg2) {
  * @return  none
  * *******************************************************************/
 static void formatRxCounters(const JaroliftController::RxDiagnostics &d, int16_t rssiDbm, char *buf, size_t len) {
-  snprintf(buf, len, "irq=%s rssi=%d edges=%lu sync=%lu frames=%lu lost=%lu part=%lu/%lu max=%u ovf=%lu", d.irqArmed ? "armed" : "OFF",
-           (int)rssiDbm, (unsigned long)d.edges, (unsigned long)d.syncs, (unsigned long)d.frames, (unsigned long)d.completeLost,
+  snprintf(buf, len, "irq=%s rssi=%d edges=%lu sync=%lu frames=%lu bad=%lu lost=%lu part=%lu/%lu max=%u ovf=%lu", d.irqArmed ? "armed" : "OFF",
+           (int)rssiDbm, (unsigned long)d.edges, (unsigned long)d.syncs, (unsigned long)d.frames, (unsigned long)d.rejected, (unsigned long)d.completeLost,
            (unsigned long)d.partialShort, (unsigned long)d.partialLong, (unsigned)d.longestAbandoned, (unsigned long)d.overflows);
 }
 

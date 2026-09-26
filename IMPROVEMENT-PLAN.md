@@ -285,12 +285,25 @@ Seen in the same capture, not yet acted on:
   whatever the buffer held: the capture shows `11111111`, `00000000` and
   `00000001` for the same button. Upstream has the same fault. The tracker does
   not use that field; the MQTT status telegram does.
-- **No integrity check.** One frame decoded as `serial: 0x00349a06 | cmd: 0x0`
-  - a noise-damaged frame accepted as genuine. This firmware's own transmit
-  side puts the serial's low byte into the encrypted word
-  (`disc << 16 | counter`, with that byte in `disc`). If the remotes do the
-  same, it is a cheap check that a frame decrypted with this master key and
-  was not damaged - to be confirmed against real frames before relying on it.
+- ~~**No integrity check**~~ - fixed, and it turned out to matter more than it
+  looked. After the loop() stall was removed, frames decoded at eight to nine a
+  second against eight to nine sync pulses, and `lost` fell from three to five
+  a second to about zero. But one five second hold of UP then told the tracker
+  UP four times: damaged frames - `serial: 0x0034940c | cmd: 0x0` among them -
+  landed inside the press, each looked like a different remote, and the
+  genuine frame after it counted as a new press. 0x34940c is the real serial
+  0x1a4a06 shifted left by exactly one bit: the pulse decoder read the frame one
+  position out of step, which also turns UP into function 0x0. A frame is now
+  dropped unless its function is one a Jarolift transmitter sends and the
+  decrypted word carries the serial's low byte, where this firmware's own
+  transmit side puts it (`FrameCheck.h`). The second check is what matters: a
+  misaligned UP from a serial with its top bit set reads as 0x1, a legitimate
+  learn code, and only the serial byte catches it. Tests in `test/test_frame`
+  run real KeeLoq end to end and reproduce the logged misalignment exactly.
+  The remote-side word layout is inferred from the transmit side and the
+  receiver's existing channel decoding rather than observed directly; the
+  diagnostics count rejected frames as `bad=`, so a wrong inference would show
+  as frames arriving and every one of them rejected.
 - ~~**Half the frames are lost**~~ - fixed. After every decoded frame loop()
   spent about 280 ms in an SCAL strobe, `delay(50)`, `enterRx()` and
   `delay(200)`; complete frames arrived and were overwritten meanwhile

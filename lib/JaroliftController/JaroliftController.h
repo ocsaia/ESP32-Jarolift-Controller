@@ -2,6 +2,7 @@
 #ifndef JARO_LIFT_CONTROLLER_H
 #define JARO_LIFT_CONTROLLER_H
 
+#include "FrameCheck.h"
 #include "KeeloqLib.h"
 #include "ShadeDetector.h"
 #include "cc1101.h"
@@ -104,7 +105,8 @@ public:
     uint32_t partialLong;      // abandoned after 48+ pulses without being a decodable frame
     uint32_t completeLost;     // a whole frame (sync + 65..75 pulses) overwritten before decoding
     uint16_t longestAbandoned; // most pulses any abandoned frame reached
-    uint32_t frames;           // frames that were decoded
+    uint32_t frames;           // frames taken for decoding
+    uint32_t rejected;         // of those, dropped by FrameCheck - damaged or foreign
     uint32_t overflows;        // bursts longer than the pulse buffer
     bool irqArmed;             // is the RX interrupt attached right now - free to read, no SPI
   };
@@ -184,6 +186,7 @@ private:
   volatile uint16_t diagLongest_ = 0;
   volatile uint32_t diagOverflows_ = 0;
   uint32_t diagFrames_ = 0;
+  uint32_t diagRejected_ = 0;
   void noteDiscardedFrame(); // ISR context, caller holds rxMux_
 
   // Snapshot of one frame, taken under rxMux_ so decoding never races the ISR.
