@@ -225,6 +225,18 @@ remote-press path needs a wall remote pressed with the broker stopped. The
 command queue under a Home Assistant restart with retained commands, and the
 retained-discovery cleanup, are both untouched.
 
+*v1.9.0-ocsaia.1 on the device.* `442e3ee` was flashed afterwards and checked
+on 2026-09-26. The "Serialnumber invalid!" error bar is gone from a device whose
+base serial is 0, so the false alarm reported at the very start of this work is
+resolved rather than explained away. The version dialog shows
+`v1.9.0-ocsaia.1`, and "check version" against the fork answers "error" with no
+Update button - this fork publishes no releases, so the update path now has
+nowhere to go, which is the point. That "error" is rendered as a link but
+carries no href, neither in the page source nor from the failure branch, so it
+leads nowhere either. The invalid-channel message from the same batch is still
+unchecked; a publish to `<base>/cmd/shutter/17` should now answer
+"invalid channel" on `<base>/message`.
+
 *Open design question.* SHADE does not update the tracker on either path - the
 remote handler and processJaroCommands() both publish POS_SHADE to MQTT and
 leave the estimate where it was. Home Assistant then shows 10 % while the
