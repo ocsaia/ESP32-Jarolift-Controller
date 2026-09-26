@@ -108,6 +108,15 @@ it in `configLoadFromFile()`, set a default in `configInitValue()`, bump
 `CFG_VERSION` and document it. A missing JSON key silently reads as 0/false, so
 defaults matter.
 
+**Every CC1101 register access costs 10 ms.** `cc1101.cpp` defines
+`wait_Miso()` as `delay(10)` instead of waiting for MISO, and every `readReg`,
+`writeReg` and `cmdStrobe` goes through it. Never touch a register from
+anything periodic or per-`loop()`-pass: a complete received frame survives in
+the ISR buffer only until the next frame's first edge - roughly the 16 ms
+inter-frame gap - so a 10 ms stall in `loop()` loses frames. The radio
+diagnostics read RSSI once per second for exactly this reason, and the
+register read-back only runs when someone asks for it.
+
 **Do not use 0 as an "unset" sentinel for radio values.** `config.jaro.serial`
 is a legal base serial when it is 0 (channel serials become `0x00…0x0F`), and a
 live device runs that way. Changing the base serial re-derives every channel's

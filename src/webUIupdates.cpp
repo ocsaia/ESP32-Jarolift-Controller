@@ -137,6 +137,13 @@ void updateShutterPositions() {
   webUI.addJson(jsonDoc, "p04_calib_status",
                 shutterCalibIsActive(srvShutter) ? WEB_TXT::CALIB_RUNNING[config.lang] : WEB_TXT::CALIB_IDLE[config.lang]);
 
+  // radio diagnostics card: the switch follows the firmware, so the ten-minute
+  // automatic switch-off shows on the page instead of leaving it ticked. No
+  // register read here - the line is the one the periodic diagnostic already
+  // produced.
+  webUI.addJson(jsonDoc, "p04_radio_diag", jaroRadioDiagActive() ? "true" : "false");
+  webUI.addJson(jsonDoc, "p04_radio_diag_line", jaroRadioDiagLastLine());
+
   webUI.wsUpdateWebJSON(jsonDoc);
 }
 

@@ -321,6 +321,183 @@ uint16_t jaroGetDevCnt() { return jarolift.getDeviceCounter(); };
 bool getCC1101State() { return jarolift.getCC1101State(); };
 uint8_t getCC1101Rssi() { return jarolift.getRssi(); }
 
+/* R A D I O   D I A G N O S T I C S ******************************************/
+
+// One line per period while enabled. A second is short enough to line up with
+// a button press as it happens, and long enough that one press shows as a burst.
+#define RADIO_DIAG_PERIOD_MS 1000UL
+// It switches itself off. At a line a second it would push everything else out
+// of the 200-line log buffer within minutes, and a switch someone forgot about
+// should not keep doing that.
+#define RADIO_DIAG_TIMEOUT_MS (10UL * 60UL * 1000UL)
+
+static bool radioDiagOn = false;
+static uint32_t radioDiagStartMs = 0;
+static uint32_t radioDiagLastMs = 0;
+static char radioDiagLine[112] = "--";
+
+static const char *marcStateName(uint8_t state) {
+  switch (state) {
+  case 0x01:
+    return "IDLE";
+  case 0x0D:
+    return "RX";
+  case 0x11:
+    return "RX_OVERFLOW";
+  case 0x13:
+  case 0x14:
+  case 0x15:
+    return "TX";
+  case 0x16:
+    return "TX_UNDERFLOW";
+  default:
+    return "other";
+  }
+}
+
+static const char *modFormatName(uint8_t mdmcfg2) {
+  switch ((mdmcfg2 >> 4) & 0x07) {
+  case 0:
+    return "2-FSK";
+  case 1:
+    return "GFSK";
+  case 3:
+    return "ASK/OOK";
+  case 4:
+    return "4-FSK";
+  case 7:
+    return "MSK";
+  default:
+    return "reserved";
+  }
+}
+
+/**
+ * *******************************************************************
+ * @brief   one diagnostic counter set, formatted compactly
+ * @details Short keys on purpose: the line goes through the log buffer, whose
+ *          entries are MAX_LOG_ENTRY (128) characters including the level,
+ *          timestamp and tag prefix.
+ * @param   d, rssiDbm, buf, len
+ * @return  none
+ * *******************************************************************/
+static void formatRxCounters(const JaroliftController::RxDiagnostics &d, int16_t rssiDbm, char *buf, size_t len) {
+  snprintf(buf, len, "irq=%s rssi=%d edges=%lu sync=%lu frames=%lu lost=%lu part=%lu/%lu max=%u ovf=%lu", d.irqArmed ? "armed" : "OFF",
+           (int)rssiDbm, (unsigned long)d.edges, (unsigned long)d.syncs, (unsigned long)d.frames, (unsigned long)d.completeLost,
+           (unsigned long)d.partialShort, (unsigned long)d.partialLong, (unsigned)d.longestAbandoned, (unsigned long)d.overflows);
+}
+
+/**
+ * *******************************************************************
+ * @brief   the receiver as the chip reports it, in three lines
+ * @details Reads eight CC1101 registers at 10 ms each, so this is for a person
+ *          asking - the telnet "radio status" command and the moment
+ *          diagnostics are switched on - never for anything periodic. The
+ *          counters are peeked, not reset, so a running diagnostic keeps its
+ *          own window.
+ * @param   buf, len  receives up to three lines, separated by "\r\n"
+ * @return  none
+ * *******************************************************************/
+void jaroRadioStatusText(char *buf, size_t len) {
+  JaroliftController::RadioStatus s;
+  jarolift.getRadioStatus(s);
+  JaroliftController::RxDiagnostics d;
+  jarolift.takeRxDiagnostics(d, false);
+
+  char counters[112];
+  formatRxCounters(d, s.rssiDbm, counters, sizeof(counters));
+
+  if (!s.initOK) {
+    snprintf(buf, len, "radio: CC1101 not initialised - no register read-back possible\r\ncounters: %s", counters);
+    return;
+  }
+
+  // f = FREQ * 26 MHz / 2^16, filter bandwidth = 26 MHz / (8 * (4 + M) * 2^E)
+  double freqMHz = (double)s.freqWord * 26.0 / 65536.0;
+  unsigned bwE = (s.mdmcfg4 >> 6) & 0x03;
+  unsigned bwM = (s.mdmcfg4 >> 4) & 0x03;
+  unsigned bwKHz = 26000u / (8u * (4u + bwM) * (1u << bwE));
+
+  snprintf(buf, len,
+           "radio: irq=%s gpio=%d level=%d state=%s(0x%02X)\r\n"
+           "radio: IOCFG2=0x%02X %s PKTCTRL0=0x%02X %s mod=%s freq=%.3fMHz bw=%ukHz\r\n"
+           "counters: %s",
+           s.irqArmed ? "armed" : "OFF", s.irqPin, s.gdo2Level, marcStateName(s.marcState), s.marcState, s.iocfg2,
+           s.iocfg2 == CC1101_DEFVAL_IOCFG2 ? "ok" : "UNEXPECTED", s.pktctrl0, s.pktctrl0 == CC1101_DEFVAL_PKTCTRL0 ? "ok" : "UNEXPECTED",
+           modFormatName(s.mdmcfg2), freqMHz, bwKHz, counters);
+}
+
+/**
+ * *******************************************************************
+ * @brief   switch the runtime radio diagnostics on or off
+ * @details Not persisted: after a restart it is always off. Switching on logs
+ *          the chip read-back once, so the WebUI log shows it without telnet,
+ *          and starts a clean counter window. Loop context only - it reads
+ *          registers.
+ * @param   on
+ * @return  none
+ * *******************************************************************/
+void jaroRadioDiagSet(bool on) {
+  if (on == radioDiagOn) {
+    return;
+  }
+  if (!on) {
+    radioDiagOn = false;
+    snprintf(radioDiagLine, sizeof(radioDiagLine), "--");
+    ESP_LOGI(TAG, "radio diagnostics off");
+    return;
+  }
+
+  char status[360];
+  jaroRadioStatusText(status, sizeof(status));
+  // the log takes one line per call
+  char *save = NULL;
+  for (char *line = strtok_r(status, "\r\n", &save); line != NULL; line = strtok_r(NULL, "\r\n", &save)) {
+    ESP_LOGI(TAG, "%s", line);
+  }
+
+  JaroliftController::RxDiagnostics discard;
+  jarolift.takeRxDiagnostics(discard, true);
+  radioDiagStartMs = millis();
+  radioDiagLastMs = radioDiagStartMs;
+  radioDiagOn = true;
+  ESP_LOGI(TAG, "radio diagnostics on - one line per second, off again after %lu min", RADIO_DIAG_TIMEOUT_MS / 60000UL);
+}
+
+bool jaroRadioDiagActive() { return radioDiagOn; }
+
+const char *jaroRadioDiagLastLine() { return radioDiagLine; }
+
+/**
+ * *******************************************************************
+ * @brief   periodic part of the diagnostics, from jaroliftCyclic()
+ * @details One RSSI read per line, 10 ms - about 1 % of loop() time. Sampling
+ *          it faster would find the peak of a short burst, but it would also
+ *          block loop() long enough to lose the very frames being diagnosed:
+ *          a complete frame survives in the buffer only until the next frame's
+ *          first edge, roughly the 16 ms inter-frame gap.
+ * @param   none
+ * @return  none
+ * *******************************************************************/
+static void radioDiagCyclic() {
+  uint32_t now = millis();
+  if (now - radioDiagStartMs >= RADIO_DIAG_TIMEOUT_MS) {
+    radioDiagOn = false;
+    snprintf(radioDiagLine, sizeof(radioDiagLine), "--");
+    ESP_LOGI(TAG, "radio diagnostics off - %lu min elapsed", RADIO_DIAG_TIMEOUT_MS / 60000UL);
+    return;
+  }
+  if (now - radioDiagLastMs < RADIO_DIAG_PERIOD_MS) {
+    return;
+  }
+  radioDiagLastMs = now;
+
+  JaroliftController::RxDiagnostics d;
+  jarolift.takeRxDiagnostics(d, true);
+  formatRxCounters(d, jarolift.getRssiDbm(), radioDiagLine, sizeof(radioDiagLine));
+  ESP_LOGI(TAG, "diag %s", radioDiagLine);
+}
+
 /**
  * *******************************************************************
  * @brief   execute jarolift commands from buffer
@@ -451,4 +628,8 @@ void jaroliftCyclic() {
   }
 
   jarolift.loop();
+
+  if (radioDiagOn) {
+    radioDiagCyclic();
+  }
 }

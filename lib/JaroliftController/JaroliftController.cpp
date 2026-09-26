@@ -434,17 +434,96 @@ void JaroliftController::enterTx() {
  * @return  none
  * *******************************************************************/
 uint8_t JaroliftController::getRssi() {
-  uint8_t rssi = cc1101_.readReg(CC1101_RSSI, CC1101_STATUS_REGISTER);
-  uint8_t value = 0;
-  if (rssi >= 128) {
-    value = 255 - rssi;
-    value = value / 2;
-    value = value + 74;
-  } else {
-    value = rssi / 2;
-    value = value + 74;
+  // Magnitude of the level in dB, kept for the existing interface. The version
+  // this replaces added the 74 dB offset on both branches, so any signal above
+  // -74 dBm - exactly the case of a remote held next to the receiver - came out
+  // as a larger number than the noise floor. Nothing displayed it, which is why
+  // it went unnoticed.
+  return (uint8_t)(-getRssiDbm());
+}
+
+/**
+ *******************************************************************
+ * @brief   received signal strength in dBm
+ * @details CC1101 datasheet, section 17.3: the RSSI status register is two's
+ *          complement in half-dB steps, with an offset of 74 dB at 433 MHz.
+ *          Costs one register read, i.e. 10 ms (see wait_Miso()).
+ * @param   none
+ * @return  level in dBm, or 0 if the radio never initialised
+ * *******************************************************************/
+int16_t JaroliftController::getRssiDbm() {
+  if (!initOK_) {
+    return 0;
   }
-  return value;
+  int8_t raw = (int8_t)cc1101_.readReg(CC1101_RSSI, CC1101_STATUS_REGISTER);
+  return (int16_t)(raw / 2) - 74;
+}
+
+/**
+ *******************************************************************
+ * @brief   copy out the RX diagnostic counters
+ * @details Taken under rxMux_ so the ISR cannot move them half way through.
+ *          With reset the counters start a new window, which is how the
+ *          periodic diagnostic line gets per-second figures; a one-off status
+ *          query peeks instead so it does not steal that window.
+ * @param   out, reset
+ * @return  none
+ * *******************************************************************/
+void JaroliftController::takeRxDiagnostics(RxDiagnostics &out, bool reset) {
+  portENTER_CRITICAL(&rxMux_);
+  out.edges = diagEdges_;
+  out.syncs = diagSyncs_;
+  out.partialShort = diagPartialShort_;
+  out.partialLong = diagPartialLong_;
+  out.completeLost = diagCompleteLost_;
+  out.longestAbandoned = diagLongest_;
+  out.overflows = diagOverflows_;
+  if (reset) {
+    diagEdges_ = 0;
+    diagSyncs_ = 0;
+    diagPartialShort_ = 0;
+    diagPartialLong_ = 0;
+    diagCompleteLost_ = 0;
+    diagLongest_ = 0;
+    diagOverflows_ = 0;
+  }
+  portEXIT_CRITICAL(&rxMux_);
+
+  out.frames = diagFrames_;
+  if (reset) {
+    diagFrames_ = 0;
+  }
+  out.irqArmed = rxIrqAttached_;
+}
+
+/**
+ *******************************************************************
+ * @brief   read the receiver's state back from the chip
+ * @details What the CC1101 reports now, not what begin() wrote: a brown-out
+ *          resets its registers to the power-on defaults (IOCFG2 = 0x29, which
+ *          puts nothing useful on GDO2), and nothing else in the firmware would
+ *          notice. Eight register reads at 10 ms each - loop context only, and
+ *          never from anything periodic.
+ * @param   out
+ * @return  none
+ * *******************************************************************/
+void JaroliftController::getRadioStatus(RadioStatus &out) {
+  memset(&out, 0, sizeof(out));
+  out.initOK = initOK_;
+  out.irqArmed = rxIrqAttached_;
+  out.irqPin = rxIrqPin_;
+  out.gdo2Level = digitalPinIsValid(gpio_.gdo2) ? digitalRead(gpio_.gdo2) : -1;
+  if (!initOK_) {
+    return;
+  }
+  out.marcState = cc1101_.readStatusReg(CC1101_MARCSTATE) & 0x1F;
+  out.rssiDbm = getRssiDbm();
+  out.iocfg2 = cc1101_.readConfigReg(CC1101_IOCFG2);
+  out.pktctrl0 = cc1101_.readConfigReg(CC1101_PKTCTRL0);
+  out.mdmcfg2 = cc1101_.readConfigReg(CC1101_MDMCFG2);
+  out.mdmcfg4 = cc1101_.readConfigReg(CC1101_MDMCFG4);
+  out.freqWord = ((uint32_t)cc1101_.readConfigReg(CC1101_FREQ2) << 16) | ((uint32_t)cc1101_.readConfigReg(CC1101_FREQ1) << 8) |
+                 (uint32_t)cc1101_.readConfigReg(CC1101_FREQ0);
 }
 
 /**
@@ -536,7 +615,10 @@ void JaroliftController::handleRadioRxMeasure() {
   // window down to a few hundred nanoseconds per edge.
   portENTER_CRITICAL_ISR(&rxMux_);
 
+  diagEdges_++;
+
   if (currentMicros - timeout > 3500) {
+    noteDiscardedFrame();
     pbWrite_ = 0;
   }
   if (pinState) { // Übergang zu HIGH
@@ -545,6 +627,8 @@ void JaroliftController::handleRadioRxMeasure() {
     if (lowVal >= kDebounce && lowVal > 300 && lowVal < 4300) {
       if (lowVal > 3650) {
         // sync pulse - a frame always starts at index 0
+        diagSyncs_++;
+        noteDiscardedFrame(); // whatever was being collected is abandoned now
         timeout = currentMicros;
         pbWrite_ = 0;
         lowBuf_[pbWrite_] = (uint16_t)lowVal;
@@ -559,6 +643,7 @@ void JaroliftController::handleRadioRxMeasure() {
         if (pbWrite_ >= kPulseBufferSize) {
           pbWrite_ = 0;
           rxOverflow_++;
+          diagOverflows_++; // rxOverflow_ belongs to the rate-limited warning in loop()
         }
         lowBuf_[pbWrite_] = (uint16_t)lowVal;
         pbWrite_++;
@@ -576,6 +661,36 @@ void JaroliftController::handleRadioRxMeasure() {
   }
 
   portEXIT_CRITICAL_ISR(&rxMux_);
+}
+
+/**
+ *******************************************************************
+ * @brief   account for a partial frame the ISR is about to throw away
+ * @details Called with rxMux_ held, immediately before pbWrite_ is reset.
+ *          Short fragments are simply what the 433 MHz band sounds like and
+ *          are not counted - only a run long enough to have been the start of
+ *          a real frame is. A run of 65..75 pulses that begins with a sync
+ *          pulse was a complete frame: if it is being discarded, loop() did
+ *          not get to it in time, which is a different fault from never
+ *          receiving it at all. In IRAM because it runs from the interrupt.
+ * @param   none
+ * @return  none
+ * *******************************************************************/
+void IRAM_ATTR JaroliftController::noteDiscardedFrame() {
+  unsigned int n = pbWrite_;
+  if (n < 16) {
+    return;
+  }
+  if (n > diagLongest_) {
+    diagLongest_ = (uint16_t)n;
+  }
+  if (n >= 65 && n <= 75 && lowBuf_[0] > 3650) {
+    diagCompleteLost_++;
+  } else if (n >= 48) {
+    diagPartialLong_++;
+  } else {
+    diagPartialShort_++;
+  }
 }
 
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -1008,6 +1123,7 @@ void JaroliftController::processRxData() {
     return;
   }
 
+  diagFrames_++;
   rxDataReady_ = true;
   ESP_LOGD(TAG, "frame received | pulses: %u", pulseCount);
 
