@@ -385,19 +385,49 @@ static const char *modFormatName(uint8_t mdmcfg2) {
   }
 }
 
+/*
+ * How much of a log line a message may use. An entry is MAX_LOG_ENTRY (128)
+ * bytes, and addLogBuffer() spends 25 of them on "[dd.mm.yyyy - hh:mm:ss]  ",
+ * the ESP log format another 9 on "I  JARO: " once custom_vprintf() has cut
+ * the uptime out, plus the newline and the terminator. Anything past this is
+ * silently cut off in the WebUI log - the first version of the counters line
+ * lost its tail exactly that way once the numbers grew.
+ */
+#define LOG_MESSAGE_BUDGET 92
+
 /**
  * *******************************************************************
- * @brief   one diagnostic counter set, formatted compactly
- * @details Short keys on purpose: the line goes through the log buffer, whose
- *          entries are MAX_LOG_ENTRY (128) characters including the level,
- *          timestamp and tag prefix.
+ * @brief   one second's counters for the periodic diagnostic line
+ * @details The always-present part is what says whether anything arrives at
+ *          all. The fields that only mean something when they are not zero -
+ *          rejected, lost and abandoned frames, overflows - are left out when
+ *          they are zero: it keeps a quiet line well inside
+ *          LOG_MESSAGE_BUDGET even with two-digit counts everywhere, and a
+ *          field appearing is the anomaly worth reading.
  * @param   d, rssiDbm, buf, len
  * @return  none
  * *******************************************************************/
 static void formatRxCounters(const JaroliftController::RxDiagnostics &d, int16_t rssiDbm, char *buf, size_t len) {
-  snprintf(buf, len, "irq=%s rssi=%d edges=%lu sync=%lu frames=%lu bad=%lu lost=%lu part=%lu/%lu max=%u ovf=%lu", d.irqArmed ? "armed" : "OFF",
-           (int)rssiDbm, (unsigned long)d.edges, (unsigned long)d.syncs, (unsigned long)d.frames, (unsigned long)d.rejected, (unsigned long)d.completeLost,
-           (unsigned long)d.partialShort, (unsigned long)d.partialLong, (unsigned)d.longestAbandoned, (unsigned long)d.overflows);
+  int n = snprintf(buf, len, "irq=%s rssi=%d edges=%lu sync=%lu frames=%lu", d.irqArmed ? "on" : "OFF", (int)rssiDbm, (unsigned long)d.edges,
+                   (unsigned long)d.syncs, (unsigned long)d.frames);
+  if (n < 0 || (size_t)n >= len) {
+    return;
+  }
+  if (d.rejected != 0) {
+    n += snprintf(buf + n, len - n, " bad=%lu", (unsigned long)d.rejected);
+  }
+  if ((size_t)n < len && d.completeLost != 0) {
+    n += snprintf(buf + n, len - n, " lost=%lu", (unsigned long)d.completeLost);
+  }
+  if ((size_t)n < len && (d.partialShort != 0 || d.partialLong != 0)) {
+    // the longest abandoned run is left to "radio status": the two buckets
+    // already say how close the fragments came, and it keeps this line inside
+    // LOG_MESSAGE_BUDGET with every field present
+    n += snprintf(buf + n, len - n, " part=%lu/%lu", (unsigned long)d.partialShort, (unsigned long)d.partialLong);
+  }
+  if ((size_t)n < len && d.overflows != 0) {
+    snprintf(buf + n, len - n, " ovf=%lu", (unsigned long)d.overflows);
+  }
 }
 
 /**
@@ -417,11 +447,18 @@ void jaroRadioStatusText(char *buf, size_t len) {
   JaroliftController::RxDiagnostics d;
   jarolift.takeRxDiagnostics(d, false);
 
-  char counters[112];
-  formatRxCounters(d, s.rssiDbm, counters, sizeof(counters));
+  // Cumulative since boot, so these can run to ten digits each - two lines,
+  // every field always present, each inside LOG_MESSAGE_BUDGET at worst.
+  char counters[200];
+  snprintf(counters, sizeof(counters),
+           "counters: irq=%s rssi=%d edges=%lu sync=%lu frames=%lu\r\n"
+           "counters: bad=%lu lost=%lu part=%lu/%lu max=%u ovf=%lu",
+           d.irqArmed ? "on" : "OFF", (int)s.rssiDbm, (unsigned long)d.edges, (unsigned long)d.syncs, (unsigned long)d.frames,
+           (unsigned long)d.rejected, (unsigned long)d.completeLost, (unsigned long)d.partialShort, (unsigned long)d.partialLong,
+           (unsigned)d.longestAbandoned, (unsigned long)d.overflows);
 
   if (!s.initOK) {
-    snprintf(buf, len, "radio: CC1101 not initialised - no register read-back possible\r\ncounters: %s", counters);
+    snprintf(buf, len, "radio: CC1101 not initialised - no register read-back possible\r\n%s", counters);
     return;
   }
 
@@ -434,9 +471,9 @@ void jaroRadioStatusText(char *buf, size_t len) {
   snprintf(buf, len,
            "radio: irq=%s gpio=%d level=%d state=%s(0x%02X)\r\n"
            "radio: IOCFG2=0x%02X %s PKTCTRL0=0x%02X %s mod=%s freq=%.3fMHz bw=%ukHz\r\n"
-           "counters: %s",
+           "%s",
            s.irqArmed ? "armed" : "OFF", s.irqPin, s.gdo2Level, marcStateName(s.marcState), s.marcState, s.iocfg2,
-           s.iocfg2 == CC1101_DEFVAL_IOCFG2 ? "ok" : "UNEXPECTED", s.pktctrl0, s.pktctrl0 == CC1101_DEFVAL_PKTCTRL0 ? "ok" : "UNEXPECTED",
+           s.iocfg2 == CC1101_DEFVAL_IOCFG2 ? "ok" : "BAD", s.pktctrl0, s.pktctrl0 == CC1101_DEFVAL_PKTCTRL0 ? "ok" : "BAD",
            modFormatName(s.mdmcfg2), freqMHz, bwKHz, counters);
 }
 
@@ -461,7 +498,7 @@ void jaroRadioDiagSet(bool on) {
     return;
   }
 
-  char status[360];
+  char status[480];
   jaroRadioStatusText(status, sizeof(status));
   // the log takes one line per call
   char *save = NULL;
