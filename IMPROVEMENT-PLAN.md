@@ -291,8 +291,23 @@ Seen in the same capture, not yet acted on:
   frame loop() did not reach in time, so `lost=` now means the slot was still
   occupied. A group byte that was not captured whole reads as 0, not as 0xFF
   (`FrameDecoder.h`, tests in `test/test_decode`). With the mask reliable again,
-  long-press runs are keyed on all of it, so channels 9-16 of a single-serial
-  handset are separate buttons.
+  long-press runs are keyed on all of it, so channels 9-16 of a single-serial
+  handset are separate buttons.
+
+  That first version got one thing wrong, and the device showed it at once:
+  every genuine frame arrived as 72 pulses, parked, never 73. The receiver sees
+  the transmitter's line inverted - the 3880 us sync is the transmitter's 380 us
+  preamble high plus its 3500 us pause - and each bit is stored when its low
+  half ends. The low half of the last bit, the top group bit, runs into the
+  16 ms gap before the next frame and is never stored. So "whole = 73" made the
+  group byte read 0 for every real frame: right for channel 7 by accident,
+  wrong for channels 9-15. The seven paired group bits are now read from 72
+  pulses, and the eighth from its high half, which does arrive one slot past
+  the last stored pulse - 400 us is a 1, 800 us a 0. The ISR clears that slot
+  whenever it stores a pulse, so a half that never came reads as absent rather
+  than as a previous frame's leftover. The same timing may be why upstream
+  accepted a range rather than one length - the group byte it then read from
+  index 72 was never there.
 - ~~**No integrity check**~~ - fixed, and it turned out to matter more than it
   looked. After the loop() stall was removed, frames decoded at eight to nine a
   second against eight to nine sync pulses, and `lost` fell from three to five
