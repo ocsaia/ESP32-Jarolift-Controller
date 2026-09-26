@@ -7,8 +7,7 @@ JaroliftController *JaroliftController::instance_ = nullptr;
 JaroliftController::JaroliftController()
     : devCount_(0), nvsHandle_(0), nvsOpen_(false), devCountValid_(false), deviceKeyMSB_(0), deviceKeyLSB_(0), button_(0), discL_(0), discH_(0),
       disc_(0), newSerial_(0), encrypted_(0), pack_(0), pbWrite_(0), rxOverflow_(0), rxSerial_(0), rxHopCode_(0), rxFunction_(0), rxDiscH_(0),
-      initOK_(false), rxDataReady_(false), rxIrqAttached_(false), rxIrqPin_(-1), stopRunSerial_(0), stopRunChannel_(0), stopRunCount_(0),
-      stopRunReported_(false), stopRunLastMs_(0), overflowLogMs_(0) {
+      initOK_(false), rxIrqAttached_(false), rxIrqPin_(-1), overflowLogMs_(0) {
 
   memset((void *)lowBuf_, 0, sizeof(lowBuf_));
   memset((void *)hiBuf_, 0, sizeof(hiBuf_));
@@ -1124,7 +1123,6 @@ void JaroliftController::processRxData() {
   }
 
   diagFrames_++;
-  rxDataReady_ = true;
   ESP_LOGD(TAG, "frame received | pulses: %u", pulseCount);
 
   // extract Hopcode (32 Bit)
@@ -1171,39 +1169,22 @@ void JaroliftController::processRxData() {
   uint16_t channel = (ch_high << 8) | ch_low;
 
   // D1: a remote sends SHADE as a long press on STOP, which arrives as a run of
-  // STOP frames from the same remote for the same channels. steadyCount_ tried to
-  // count that with one unsigned int shared by every remote: the first non-STOP
-  // frame decremented it from 0 to 0xFFFFFFFF, which is outside the
-  // "> 10 && <= 40" window, so SHADE detection stayed dead until twelve further
-  // STOP frames wrapped it back to 11. It also never expired, so STOP presses
-  // hours apart eventually added up to a SHADE nobody asked for. The run is now
-  // per remote, per channel, and dies after kShadeRunGapMs.
-  if (rxFunction_ == FCT_CODE_STOP) {
-    unsigned long now = millis();
-    if (rxSerial_ != stopRunSerial_ || channel != stopRunChannel_ || (now - stopRunLastMs_) > kShadeRunGapMs) {
-      stopRunSerial_ = rxSerial_;
-      stopRunChannel_ = channel;
-      stopRunCount_ = 0;
-      stopRunReported_ = false;
-    }
-    stopRunLastMs_ = now;
-    if (stopRunCount_ < 0xFF) {
-      stopRunCount_++;
-    }
-    if (stopRunCount_ >= kShadeStopFrames && !stopRunReported_) {
-      // report the long press exactly once - holding the button even longer must
-      // not send a second SHADE, so the rest of the run stays STOP
-      stopRunReported_ = true;
-      rxFunction_ = FCT_CODE_SHADE;
-      ESP_LOGD(TAG, "long STOP press -> SHADE | serial: 0x%08lx | frames: %u", (unsigned long)rxSerial_, (unsigned)stopRunCount_);
-    }
-  } else {
-    // any other function code ends the run
-    stopRunSerial_ = rxSerial_;
-    stopRunChannel_ = channel;
-    stopRunCount_ = 0;
-    stopRunReported_ = false;
-    stopRunLastMs_ = millis();
+  // STOP frames from the same remote. steadyCount_ tried to count that with one
+  // unsigned int shared by every remote: the first non-STOP frame decremented it
+  // from 0 to 0xFFFFFFFF, outside its "> 10 && <= 40" window, and it never
+  // expired, so STOP presses hours apart eventually added up to a SHADE nobody
+  // asked for. ShadeDetector keeps one run, per remote, measured in time held.
+  //
+  // Only the low byte of the channel identifies the run. It comes from the
+  // decrypted hop code and is stable; the high byte comes from the frame's last
+  // eight pulses, which are currently decoded before they have arrived and
+  // differ from frame to frame of one press - comparing them broke every run
+  // apart, so a held STOP could miss its SHADE.
+  uint8_t fnIn = rxFunction_;
+  rxFunction_ = shade_.update(rxSerial_, ch_low, rxFunction_, millis());
+  if (rxFunction_ == FCT_CODE_SHADE && fnIn == FCT_CODE_STOP) {
+    ESP_LOGD(TAG, "long STOP press -> SHADE | serial: 0x%08lx | held %lu ms", (unsigned long)rxSerial_,
+             (unsigned long)(shade_.lastMs - shade_.startMs));
   }
 
   // callback function to receive information outside this library
@@ -1276,23 +1257,24 @@ void JaroliftController::loop() {
   if (!initOK_)
     return;
 
-  if (rxDataReady_) {
-    // D3: recalibrate the receiver after a decoded frame with the ISR disarmed.
-    // The re-attachInterrupt() that used to sit at the end of this block was a
-    // no-op - nothing had ever detached - so every edge the CC1101 produced while
-    // it was recalibrated and re-tuned was measured as if it were part of a frame.
-    detachRxInterrupt();
-    cc1101_.cmdStrobe(CC1101_SCAL);
-    delay(50);
-    rxDataReady_ = false;
-    // enterRx() before the settle, not after: the ISR only has to be down across
-    // the recalibration itself. Arming it afterwards would leave the receiver deaf
-    // for the whole 200 ms too, which is longer than a remote's frame repeat
-    // period - the second frame of a button press would be missed.
-    enterRx(); // back into RX, and arm the ISR again
-    delay(200);
-  }
-
+  /*
+   * There used to be a block here that ran after every decoded frame: an SCAL
+   * strobe, delay(50), enterRx(), delay(200) - about 280 ms with every register
+   * access costing 10 ms, and the RX interrupt detached for part of it.
+   *
+   * It did not do what its comment said. SCAL is an IDLE-state strobe (see its
+   * definition in cc1101.h), and this sent it with the radio in RX: at best it
+   * was ignored, at worst it dropped the receiver out of RX until enterRx() put
+   * it back. The synthesizer is calibrated on the IDLE-to-RX transition at boot
+   * (MCSM0.FS_AUTOCAL = 1), and nothing here ever recalibrated it again.
+   *
+   * What the block did do was stop loop() for 280 ms per frame. Measured on the
+   * live device with a remote held: two to three frames a second decoded, three
+   * to five complete frames a second overwritten before loop() got to them - and
+   * everything else in loop(), including the position tracker's timed stops,
+   * waiting behind it. The long-press detection had been tuned to that stall as a
+   * frame count; it is now a hold time (ShadeDetector.h).
+   */
   processRxData(); // process received data
 
   // A1: report a saturated pulse buffer, but not once per burst - a neighbour's

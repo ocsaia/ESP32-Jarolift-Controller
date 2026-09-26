@@ -145,6 +145,20 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
     break;
   }
 
+  /*
+   * One press, one report. A held button repeats its frame for as long as it is
+   * held; the radio library used to stall loop() for 280 ms after every decoded
+   * frame, which throttled that to two or three a second by accident. Without
+   * the stall every repeat decodes, and a five second press would put thirty
+   * lines in the 200-line log and thirty telegrams on the broker. Repeats are
+   * logged at debug level only - still visible when looking for them - and go
+   * no further.
+   */
+  if (remoteIsRepeat(serial, function, millis())) {
+    ESP_LOGD(TAG, "received remote signal (repeat) | serial: 0x%08lx | cmd: %s", serial, fun);
+    return;
+  }
+
   // The web log is the only feedback a user gets for a remote button press, so
   // it is written before anything that can bail out - with the broker down or
   // MQTT disabled the press used to disappear completely.
@@ -174,28 +188,24 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
   if (remote >= 0) {
     remoteName = config.jaro.remote_name[remote];
 
-    // A held button repeats its frame several times a second. The log line and
-    // the status telegram still go out for every frame, as they always have;
-    // only the tracker is told once per press - see remoteIsRepeat().
-    if (!remoteIsRepeat(serial, function, millis())) {
-      for (int j = 0; j < 16; j++) {
-        if (config.jaro.remote_mask[remote] & (1 << j)) {
-          switch (function) {
-          case REMOTE_FN_DOWN:
-            shutterPosNotifyDown(j);
-            break;
-          case REMOTE_FN_UP:
-            shutterPosNotifyUp(j);
-            break;
-          case REMOTE_FN_STOP:
-            shutterPosNotifyStop(j);
-            break;
-          case REMOTE_FN_SHADE:
-            mqttSendPosition(j, POS_SHADE);
-            break;
-          default:
-            break;
-          }
+    // repeats of this press returned at the top, so this runs once per press
+    for (int j = 0; j < 16; j++) {
+      if (config.jaro.remote_mask[remote] & (1 << j)) {
+        switch (function) {
+        case REMOTE_FN_DOWN:
+          shutterPosNotifyDown(j);
+          break;
+        case REMOTE_FN_UP:
+          shutterPosNotifyUp(j);
+          break;
+        case REMOTE_FN_STOP:
+          shutterPosNotifyStop(j);
+          break;
+        case REMOTE_FN_SHADE:
+          mqttSendPosition(j, POS_SHADE);
+          break;
+        default:
+          break;
         }
       }
     }
