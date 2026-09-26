@@ -271,6 +271,11 @@ end-stop timer restarted on every frame. The tracker is now told once per press
 that the radio library turns into SHADE stays one press, so the STOP frames
 after it cannot overwrite the shade position just published.
 
+Flashed and tried on the device the same day, with the result reported as
+working: a wall-remote press now reaches Home Assistant. No log of that run
+was captured, so the once-per-press behaviour itself is covered by the tests
+rather than by an observed trace.
+
 Seen in the same capture, not yet acted on:
 
 - **Frames are taken at 65 pulses.** processRxData() accepts 65..75 and takes
@@ -286,11 +291,21 @@ Seen in the same capture, not yet acted on:
   (`disc << 16 | counter`, with that byte in `disc`). If the remotes do the
   same, it is a cheap check that a frame decrypted with this master key and
   was not damaged - to be confirmed against real frames before relying on it.
-- **Half the frames are lost** (`lost=3..5` per second while held). After every
-  decoded frame loop() spends about 270 ms in `delay(50)`, a recalibration and
-  `delay(200)`, during which complete frames arrive and are overwritten. The
-  remote repeats, so a press still gets through, but loop() is blocked for all
-  of it.
+- ~~**Half the frames are lost**~~ - fixed. After every decoded frame loop()
+  spent about 280 ms in an SCAL strobe, `delay(50)`, `enterRx()` and
+  `delay(200)`; complete frames arrived and were overwritten meanwhile
+  (`lost=3..5` a second), and everything else in loop() - the tracker's timed
+  stops included - waited behind it. The block never recalibrated anything:
+  SCAL is an IDLE-state strobe and was sent in RX; the synthesizer is
+  calibrated on the IDLE-to-RX transition at boot (MCSM0.FS_AUTOCAL = 1). It is
+  gone. Two things leaned on it: SHADE detection counted eleven STOP frames,
+  which only meant three seconds at that stall rate and is now a three-second
+  hold time (`ShadeDetector.h`, tests in `test/test_shade`); and the stall
+  throttled the log and the status telegram, which now go out once per press,
+  repeats at debug level only. The same review found SHADE runs keyed on the
+  whole channel mask, whose high byte is decoded before it arrives and changes
+  between frames of one press - so a held STOP could miss its SHADE. Runs are
+  keyed on the low byte now.
 
 Found earlier while reading the RX path, recorded rather than acted on:
 

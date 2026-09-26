@@ -40,8 +40,9 @@ int remoteFind(uint32_t serial);
  * press. A held STOP that the radio library has turned into SHADE keeps
  * arriving as STOP afterwards; those frames belong to the SHADE press too.
  *
- * Call it for every frame of a configured remote - each call extends a press
- * that is still being held.
+ * Call it once for every decoded frame, known remote or not - each call extends
+ * a press that is still being held, and the caller logs, publishes and informs
+ * the tracker only when it returns false.
  */
 bool remoteIsRepeat(uint32_t serial, int8_t function, uint32_t nowMs);
 

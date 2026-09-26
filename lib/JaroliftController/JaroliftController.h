@@ -3,6 +3,7 @@
 #define JARO_LIFT_CONTROLLER_H
 
 #include "KeeloqLib.h"
+#include "ShadeDetector.h"
 #include "cc1101.h"
 #include <Arduino.h>
 #include <EEPROM.h>
@@ -200,17 +201,12 @@ private:
 
   // Laufzeitzustand
   bool initOK_;
-  bool rxDataReady_;
   bool rxIrqAttached_; // D3: TX detaches the RX ISR, so attach/detach must stay symmetric
   int rxIrqPin_;       // pin the ISR is attached to - a re-init may change gpio_.gdo2
 
   // SHADE detection (D1): a remote sends SHADE as a long press on STOP, which
-  // arrives as a run of STOP frames from one remote for one set of channels.
-  uint32_t stopRunSerial_;
-  uint16_t stopRunChannel_;
-  uint8_t stopRunCount_;
-  bool stopRunReported_;
-  unsigned long stopRunLastMs_;
+  // arrives as a run of STOP frames - see ShadeDetector.h.
+  ShadeDetector shade_;
 
   unsigned long overflowLogMs_; // rate limit for the A1 overrun warning
 
@@ -232,13 +228,6 @@ private:
   // B3: discLowArr_/discHighArr_ have one entry per channel, and every public
   // command takes a uint8_t channel that ends up as an index into them.
   static constexpr uint8_t kMaxChannels = 16;
-
-  // D1: consecutive STOP frames that count as a long press. The original fired at
-  // "steadyCount_ > 10" and loop() needs ~250 ms to recover per decoded frame, so
-  // this is roughly three seconds of holding the button.
-  static constexpr uint8_t kShadeStopFrames = 11;
-  // A pause longer than this ends the run: two separate STOP presses must not add up.
-  static constexpr unsigned long kShadeRunGapMs = 1500;
 
   static constexpr char *TAG = "JARO-LIB"; // LOG TAG
 
