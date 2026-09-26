@@ -319,7 +319,7 @@ void cmdTest(char param[MAX_PAR][MAX_CHAR]) {
 void cmdRadio(char param[MAX_PAR][MAX_CHAR]) {
 
   if (!strcmp(param[1], "status") && !strcmp(param[2], "")) {
-    char status[360];
+    char status[480];
     jaroRadioStatusText(status, sizeof(status));
     telnet.println(status);
     telnet.println(jaroRadioDiagActive() ? "diagnostics: on" : "diagnostics: off");

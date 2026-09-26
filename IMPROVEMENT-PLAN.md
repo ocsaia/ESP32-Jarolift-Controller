@@ -304,6 +304,10 @@ Seen in the same capture, not yet acted on:
   receiver's existing channel decoding rather than observed directly; the
   diagnostics count rejected frames as `bad=`, so a wrong inference would show
   as frames arriving and every one of them rejected.
+  Confirmed on the device: one six-second hold of UP, 44 frames taken, 42
+  accepted and 2 rejected, one `received remote signal` line and one tracker
+  notification. The inference holds for real remote frames - had it been
+  wrong, all 44 would have been rejected.
 - ~~**Half the frames are lost**~~ - fixed. After every decoded frame loop()
   spent about 280 ms in an SCAL strobe, `delay(50)`, `enterRx()` and
   `delay(200)`; complete frames arrived and were overwritten meanwhile

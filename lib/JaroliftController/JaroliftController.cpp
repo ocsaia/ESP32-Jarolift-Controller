@@ -1171,7 +1171,9 @@ void JaroliftController::processRxData() {
   // assumption would show too: frames arriving, every one of them rejected.
   if (!FrameCheck::valid(rxSerial_, rxFunction_, decoded)) {
     diagRejected_++;
-    ESP_LOGD(TAG, "frame rejected | serial: 0x%08lx | fn: 0x%x | serial byte in hop: 0x%02x, expected 0x%02x", (unsigned long)rxSerial_,
+    // kept short: with this library's longer tag a log line has about 88
+    // characters for the message before the WebUI log cuts it off
+    ESP_LOGD(TAG, "frame rejected | serial: 0x%08lx | fn: 0x%x | hop byte 0x%02x, want 0x%02x", (unsigned long)rxSerial_,
              (unsigned)rxFunction_, (unsigned)((decoded >> 16) & 0xFF), (unsigned)(rxSerial_ & 0xFF));
     rxDiscH_ = 0;
     rxHopCode_ = 0;
