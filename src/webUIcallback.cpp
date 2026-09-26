@@ -511,6 +511,12 @@ void webCallback(const char *elementId, const char *value) {
     shutterCalibAbort(srvShutter);
   }
 
+  // runtime radio diagnostics - this callback runs from cmdQueueCyclic() in
+  // loop(), which is where switching them on may read CC1101 registers
+  if (strcmp(elementId, "p04_radio_diag") == 0) {
+    jaroRadioDiagSet(EspStrUtil::stringToBool(value));
+  }
+
   if (strcmp(elementId, "p04_cmd_end_down_delete") == 0) {
     jaroCmd(CMD_DEL_END_POINT_DOWN, srvShutter);
     webUI.wsShowInfoMsg(WEB_TXT::CMD_DEL_ENDPOINT_DOWN[config.lang]);

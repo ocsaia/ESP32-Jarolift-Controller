@@ -50,6 +50,14 @@ const user_translations = {
     de: "Abbrechen",
     en: "abort",
   },
+  radio_diag: {
+    de: "Funk-Diagnose",
+    en: "Radio diagnostics",
+  },
+  info_radio_diag: {
+    de: "Zeigt Stufe fuer Stufe, was der Empfaenger aus einer Fernbedienung macht. Einschalten, Fernbedienung druecken, Log lesen: jede Sekunde eine Zeile mit RX-Interrupt, Signalpegel, Flanken, Sync-Impulsen und fertigen Rahmen - sowie begonnenen, aber verlorenen Rahmen. Keine Flanken deuten auf Verdrahtung oder Funkkonfiguration, Flanken ohne Rahmen auf das Timing. Wird nicht gespeichert und schaltet sich nach 10 Minuten selbst ab.",
+    en: "Shows, stage by stage, what the receiver makes of a remote. Switch on, press the remote, read the log: one line per second with the RX interrupt, signal level, edges, sync pulses and complete frames - plus frames that were started but lost. No edges at all points to wiring or the radio configuration, edges without frames to timing. Not saved, and switches itself off after 10 minutes.",
+  },
   calib_idle: {
     de: "keine Kalibrierung aktiv",
     en: "no calibration running",

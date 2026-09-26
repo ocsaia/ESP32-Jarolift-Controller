@@ -237,6 +237,55 @@ leads nowhere either. The invalid-channel message from the same batch is still
 unchecked; a publish to `<base>/cmd/shutter/17` should now answer
 "invalid channel" on `<base>/message`.
 
+*Open: the live device receives nothing from a wall remote.* Reported as Home
+Assistant keeping one direction disabled: a shutter raised with a wall remote
+still shows as closed, because HA only ever hears about moves it issued itself.
+Pressing the remote produces no "received remote signal" line at all, and that
+line is written before the remote is looked up - so no frame is completing, not
+merely going unrecognised. Reading the RX path against upstream found nothing:
+the ISR is equivalent apart from the A1 bounds, frame detection and decoding are
+the same, every transmit path re-arms reception, begin() arms it, and the radio
+driver is untouched. Whether reception ever worked on this hardware is not
+known yet.
+
+That is what the runtime radio diagnostics are for - see below. What the
+per-second line should reveal: `edges=0` means nothing reaches GDO2 (wiring, or
+a chip whose registers no longer hold the configuration); edges with `sync=0`
+means nothing frame-shaped arrives; syncs with `frames=0` and a high `max` or
+`part` count points at the frame being extended by noise until it no longer
+fits 65..75 pulses - a data pulse is anything low for 300..1000 us, and a noisy
+band supplies plenty; `lost>0` means frames complete but loop() is too slow to
+take them before the next frame overwrites them.
+
+Found on the way, recorded rather than acted on where it is not the fault:
+
+- Every CC1101 register access costs 10 ms (`wait_Miso()` is `delay(10)`).
+  Now in CLAUDE.md.
+- The carrier is 433.945 MHz (`FREQ0 = 0xB0`), not Jarolift's 433.92. The
+  channel filter is about 271 kHz wide (`MDMCFG4 = 0x69`), so 25 kHz is well
+  inside it - not the cause.
+- `getRssi()` added the 74 dB offset on both branches, so anything stronger
+  than -74 dBm read as weaker than the noise floor. Nothing displayed it; it is
+  corrected as part of the diagnostics, which are its first consumer.
+- The remote table on the live device can never match, independently of
+  reception. mqttSendRemote() compares `serial >> 8`, at most 20 bits for the
+  28-bit KeeLoq serial; the stored entries are values like `0x1a4a06`, 21 bits.
+  They look like the per-channel serials of a multi-channel handset
+  (`0x1a4a00` + channel), which the `>> 8` scheme would fold onto a single
+  entry anyway. To be fixed once frames arrive and the real serials can be
+  seen - the first review of this table suggested filling the gap at row 0 with
+  `1a4a00` without noticing the whole pattern cannot match.
+
+*Runtime radio diagnostics.* Off at every boot, never persisted, switched from
+the service page or with `radio diag on|off` over telnet; it switches itself
+off after ten minutes so a forgotten switch cannot flood the 200-line log.
+Switching on logs a read-back of the receiver - IRQ armed, GDO2 level, MARCSTATE,
+IOCFG2 and PKTCTRL0 against their expected values, modulation, carrier and
+filter bandwidth - and then one line per second of ISR counters. `radio status`
+prints the same read-back on demand without disturbing the counters. The ISR
+counts unconditionally; it is a few increments per edge, cheaper than a branch
+on whether anyone is listening.
+
 *Open design question.* SHADE does not update the tracker on either path - the
 remote handler and processJaroCommands() both publish POS_SHADE to MQTT and
 leave the estimate where it was. Home Assistant then shows 10 % while the

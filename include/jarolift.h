@@ -9,6 +9,15 @@ uint16_t jaroGetDevCnt();
 void jaroliftSetup();
 void jaroliftCyclic();
 
+// Runtime radio diagnostics - off at every boot, never persisted. While on, one
+// line per second goes to the log; it switches itself off after ten minutes.
+// Loop context only: switching on and the status text both read CC1101
+// registers, which the radio driver makes cost 10 ms each.
+void jaroRadioDiagSet(bool on);
+bool jaroRadioDiagActive();
+const char *jaroRadioDiagLastLine();
+void jaroRadioStatusText(char *buf, size_t len);
+
 // Sends a STOP for one channel immediately instead of queueing it. Position
 // control needs this: processJaroCommands() only runs every SEND_CYCLE ms, and
 // half a second of extra travel is a visible position error.

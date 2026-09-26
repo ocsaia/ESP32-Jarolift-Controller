@@ -30,6 +30,7 @@ void cmdSerial(char param[MAX_PAR][MAX_CHAR]);
 void cmdTest(char param[MAX_PAR][MAX_CHAR]);
 void cmdShutter(char param[MAX_PAR][MAX_CHAR]);
 void cmdGroup(char param[MAX_PAR][MAX_CHAR]);
+void cmdRadio(char param[MAX_PAR][MAX_CHAR]);
 
 Command commands[] = {
     {"cls", cmdCls, "Clear screen", ""},
@@ -42,6 +43,7 @@ Command commands[] = {
     {"serial", cmdSerial, "serial stream output", "stream <start|stop>"},
     {"shutter", cmdShutter, "shutter commands", "<1..16> <up|down|stop|shade>"},
     {"group", cmdGroup, "group commands", "<1..6> <up|down|stop|shade>"},
+    {"radio", cmdRadio, "radio diagnostics", "status | diag <on|off>"},
     {"test", cmdTest, "test commands", "<crash|watchdog>"},
 };
 const int commandsCount = sizeof(commands) / sizeof(commands[0]);
@@ -300,6 +302,37 @@ void cmdTest(char param[MAX_PAR][MAX_CHAR]) {
     // these two commands intentionally kill the device, so a typo silently doing nothing is the worst
     // possible feedback - the user cannot tell a rejected command from a test that failed to fire
     telnet.println("unknown parameter - use: test <crash|watchdog>");
+  }
+}
+
+/**
+ * *******************************************************************
+ * @brief   radio diagnostics
+ * @details "radio status" reads the receiver back from the CC1101 and prints
+ *          the counters without resetting them. "radio diag on|off" switches
+ *          the per-second log line; the WebUI switch on the service page does
+ *          the same. Runs from cyclicTelnet() in loop(), which is where register
+ *          reads are allowed.
+ * @param   param
+ * @return  none
+ * *******************************************************************/
+void cmdRadio(char param[MAX_PAR][MAX_CHAR]) {
+
+  if (!strcmp(param[1], "status") && !strcmp(param[2], "")) {
+    char status[360];
+    jaroRadioStatusText(status, sizeof(status));
+    telnet.println(status);
+    telnet.println(jaroRadioDiagActive() ? "diagnostics: on" : "diagnostics: off");
+  } else if (!strcmp(param[1], "diag") && !strcmp(param[2], "on")) {
+    // no check for a fourth word: MAX_PAR is 3, and the parser already refuses
+    // a line with more parameters than that
+    jaroRadioDiagSet(true);
+    telnet.println("radio diagnostics on - one line per second in the log, off again after 10 min");
+  } else if (!strcmp(param[1], "diag") && !strcmp(param[2], "off")) {
+    jaroRadioDiagSet(false);
+    telnet.println("radio diagnostics off");
+  } else {
+    telnet.println("unknown parameter - use: radio status | radio diag <on|off>");
   }
 }
 

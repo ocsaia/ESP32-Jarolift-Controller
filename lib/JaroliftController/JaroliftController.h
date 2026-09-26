@@ -81,6 +81,53 @@ public:
   uint32_t getSerial(uint8_t channel);
   bool getCC1101State();
   uint8_t getRssi();
+  int16_t getRssiDbm();
+
+  /*
+   * Runtime radio diagnostics.
+   *
+   * Everything a received frame has to survive, counted at the point where it
+   * could be lost: an edge on GDO2, a sync pulse that starts a frame, the pulses
+   * that follow it, and whether the frame completed or was thrown away part way.
+   * When a remote "does nothing", these say which stage it died in - no signal
+   * on the pin at all, a signal that never forms a frame, or frames that form
+   * and are lost before loop() decodes them.
+   *
+   * The ISR counts unconditionally; it is a handful of increments per edge and
+   * keeping it branch-free is cheaper than asking whether anyone is listening.
+   */
+  struct RxDiagnostics {
+    uint32_t edges;            // every GDO2 transition the ISR saw
+    uint32_t syncs;            // sync pulses (low 3650..4300 us) - each opens a frame
+    uint32_t partialShort;     // abandoned after 16..47 pulses
+    uint32_t partialLong;      // abandoned after 48+ pulses without being a decodable frame
+    uint32_t completeLost;     // a whole frame (sync + 65..75 pulses) overwritten before decoding
+    uint16_t longestAbandoned; // most pulses any abandoned frame reached
+    uint32_t frames;           // frames that were decoded
+    uint32_t overflows;        // bursts longer than the pulse buffer
+    bool irqArmed;             // is the RX interrupt attached right now - free to read, no SPI
+  };
+
+  // Read-back of the receiver as the chip reports it, not as it was configured.
+  // Loop context only: every register access costs 10 ms (see wait_Miso() in
+  // cc1101.cpp), so this is for on-demand use, never for a polling path.
+  struct RadioStatus {
+    bool initOK;
+    bool irqArmed;
+    int irqPin;
+    int gdo2Level; // -1 if the pin is not a valid GPIO
+    uint8_t marcState;
+    int16_t rssiDbm;
+    uint8_t iocfg2;   // expected 0x0D: GDO2 carries the asynchronous serial data
+    uint8_t pktctrl0; // expected 0x32: asynchronous serial mode
+    uint8_t mdmcfg2;  // modulation format in bits 6:4, 3 = ASK/OOK
+    uint8_t mdmcfg4;  // channel filter bandwidth in bits 7:4
+    uint32_t freqWord;
+  };
+
+  // reset == false peeks without disturbing the window a periodic reader owns
+  void takeRxDiagnostics(RxDiagnostics &out, bool reset = true);
+  void getRadioStatus(RadioStatus &out);
 
 private:
   // Instanzvariablen (anstatt globaler Variablen)
@@ -125,6 +172,18 @@ private:
   // Spinlock protecting lowBuf_/hiBuf_/pbWrite_/rxOverflow_ against the RX ISR.
   // The ISR can run on the other core, so masking interrupts alone would not do.
   portMUX_TYPE rxMux_ = portMUX_INITIALIZER_UNLOCKED;
+
+  // Diagnostic counters, written by the ISR under rxMux_ and taken out by
+  // takeRxDiagnostics(). diagFrames_ is only touched from loop().
+  volatile uint32_t diagEdges_ = 0;
+  volatile uint32_t diagSyncs_ = 0;
+  volatile uint32_t diagPartialShort_ = 0;
+  volatile uint32_t diagPartialLong_ = 0;
+  volatile uint32_t diagCompleteLost_ = 0;
+  volatile uint16_t diagLongest_ = 0;
+  volatile uint32_t diagOverflows_ = 0;
+  uint32_t diagFrames_ = 0;
+  void noteDiscardedFrame(); // ISR context, caller holds rxMux_
 
   // Snapshot of one frame, taken under rxMux_ so decoding never races the ISR.
   // 76 covers the longest accepted frame (pbWrite_ <= 75); decoding reads up to
