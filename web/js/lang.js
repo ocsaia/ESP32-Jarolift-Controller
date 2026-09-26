@@ -286,6 +286,10 @@ const user_translations = {
     de: "Fernbedienung",
     en: "Remote",
   },
+  info_remote_serial: {
+    de: "Seriennummer so eintragen, wie das Log sie beim Druecken der Fernbedienung zeigt: aus \"received remote signal | serial: 0x001a4a06\" wird 1a4a06. Hat ein Handsender pro Kanal eine eigene Seriennummer, bekommt jeder Kanal einen eigenen Eintrag. Die Kurzform ohne das letzte Byte (1a4a) wird weiterhin erkannt.",
+    en: "Enter the serial number as the log shows it when the remote is pressed: \"received remote signal | serial: 0x001a4a06\" is entered as 1a4a06. A handset with a serial per channel needs one entry per channel. The short form without the last byte (1a4a) is still recognised.",
+  },
   remotes: {
     de: "Fernbedienungen",
     en: "Remotes",

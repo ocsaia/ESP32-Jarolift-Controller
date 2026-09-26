@@ -5,6 +5,7 @@
 #include <esp_task_wdt.h>
 #include <jarolift.h>
 #include <mqtt.h>
+#include <remoteMatch.h>
 #include <queue>
 #include <shutterPos.h>
 #include <timer.h>
@@ -169,24 +170,27 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
    * straight to AsyncMqttClient, which fails quietly when it has no session.
    */
   const char *remoteName = "unknown"; // until a configured remote matches
-  for (int i = 0; i < 16; i++) {
-    if (config.jaro.remote_enable[i] && (serial >> 8 == config.jaro.remote_serial[i])) {
-      remoteName = config.jaro.remote_name[i];
+  int remote = remoteFind(serial);
+  if (remote >= 0) {
+    remoteName = config.jaro.remote_name[remote];
 
-      // check if this remote is registered for one or more shutter
+    // A held button repeats its frame several times a second. The log line and
+    // the status telegram still go out for every frame, as they always have;
+    // only the tracker is told once per press - see remoteIsRepeat().
+    if (!remoteIsRepeat(serial, function, millis())) {
       for (int j = 0; j < 16; j++) {
-        if (config.jaro.remote_mask[i] & (1 << j)) {
+        if (config.jaro.remote_mask[remote] & (1 << j)) {
           switch (function) {
-          case 0x2:
+          case REMOTE_FN_DOWN:
             shutterPosNotifyDown(j);
             break;
-          case 0x8:
+          case REMOTE_FN_UP:
             shutterPosNotifyUp(j);
             break;
-          case 0x4:
+          case REMOTE_FN_STOP:
             shutterPosNotifyStop(j);
             break;
-          case 0x3:
+          case REMOTE_FN_SHADE:
             mqttSendPosition(j, POS_SHADE);
             break;
           default:
@@ -194,7 +198,6 @@ void mqttSendRemote(uint32_t serial, int8_t function, uint16_t channel) {
           }
         }
       }
-      break; // stop if a remote was found
     }
   }
 
