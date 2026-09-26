@@ -29,7 +29,7 @@ struct ShadeDetector {
   static constexpr uint32_t kGapMs = 1500;
 
   uint32_t serial = 0;
-  uint8_t channel = 0;
+  uint16_t channel = 0;
   uint32_t startMs = 0;
   uint32_t lastMs = 0;
   bool active = false;
@@ -42,12 +42,12 @@ struct ShadeDetector {
    * kHoldMs; every other frame keeps its own function, so the STOP frames that
    * keep arriving after the SHADE are still reported as STOP.
    *
-   * channel is the low byte of the decoded channel mask only. The high byte
-   * comes from the last eight pulses of the frame, which are currently decoded
-   * before they arrive and change from frame to frame of the same press -
-   * comparing it would break every run apart.
+   * channel is the decoded channel mask. Its high byte comes from the frame's
+   * last eight pulses, and was once decoded before they had arrived, changing
+   * from frame to frame of one press; frames are taken whole now (see
+   * FrameDecoder.h), so the whole mask identifies the button again.
    */
-  uint8_t update(uint32_t frameSerial, uint8_t frameChannel, uint8_t function, uint32_t nowMs) {
+  uint8_t update(uint32_t frameSerial, uint16_t frameChannel, uint8_t function, uint32_t nowMs) {
     if (function != kFnStop) {
       active = false; // any other button ends the run
       return function;

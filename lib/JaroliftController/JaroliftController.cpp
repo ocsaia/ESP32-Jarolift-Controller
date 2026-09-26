@@ -666,14 +666,22 @@ void JaroliftController::handleRadioRxMeasure() {
 
 /**
  *******************************************************************
- * @brief   account for a partial frame the ISR is about to throw away
- * @details Called with rxMux_ held, immediately before pbWrite_ is reset.
- *          Short fragments are simply what the 433 MHz band sounds like and
- *          are not counted - only a run long enough to have been the start of
- *          a real frame is. A run of 65..75 pulses that begins with a sync
- *          pulse was a complete frame: if it is being discarded, loop() did
- *          not get to it in time, which is a different fault from never
- *          receiving it at all. In IRAM because it runs from the interrupt.
+ * @brief   rescue or account for a frame the ISR is about to throw away
+ * @details Called with rxMux_ held, immediately before pbWrite_ is reset -
+ *          which is also the only point at which a frame is known to have
+ *          ended. A run of 65..75 pulses that begins with a sync pulse is a
+ *          complete frame, and it is parked in the pending slot for
+ *          processRxData() instead of being lost. That covers two cases: a
+ *          frame that genuinely ends without the eight group bits, which
+ *          processRxData() no longer takes early, and a full frame loop() did
+ *          not get to in time. Only when the slot is still occupied is a
+ *          complete frame counted as lost.
+ *
+ *          Everything else is a fragment. The short ones are simply what the
+ *          433 MHz band sounds like and are not counted; a run long enough to
+ *          have been the start of a real frame is. In IRAM because it runs
+ *          from the interrupt, and a plain loop rather than memcpy() so it
+ *          does not depend on where the C library placed that.
  * @param   none
  * @return  none
  * *******************************************************************/
@@ -682,11 +690,21 @@ void IRAM_ATTR JaroliftController::noteDiscardedFrame() {
   if (n < 16) {
     return;
   }
+  bool complete = n >= 65 && n <= 75 && lowBuf_[0] > 3650;
+  if (complete && !pendingReady_) {
+    for (size_t i = 0; i < kFrameSnapshotSize; i++) {
+      pendingLow_[i] = lowBuf_[i];
+      pendingHi_[i] = hiBuf_[i];
+    }
+    pendingPulses_ = (uint16_t)n;
+    pendingReady_ = true;
+    return;
+  }
   if (n > diagLongest_) {
     diagLongest_ = (uint16_t)n;
   }
-  if (n >= 65 && n <= 75 && lowBuf_[0] > 3650) {
-    diagCompleteLost_++;
+  if (complete) {
+    diagCompleteLost_++; // the slot was still full: loop() is more than a frame behind
   } else if (n >= 48) {
     diagPartialLong_++;
   } else {
@@ -1103,20 +1121,36 @@ void JaroliftController::processRxData() {
   // detachInterrupt() was rejected because it tears the GPIO handler down and
   // rebuilds it on every loop() pass and is deaf for the whole window.
   bool frameComplete = false;
+  bool parked = false;
   unsigned int pulseCount = 0;
 
   portENTER_CRITICAL(&rxMux_);
-  pulseCount = pbWrite_;
-  // check if RX-Buffer is full and start to decode
-  frameComplete = (lowBuf_[0] > 3650 && lowBuf_[0] < 4300) && (pulseCount >= 65 && pulseCount <= 75);
-  if (frameComplete) {
-    memcpy(snapLow_, (const void *)lowBuf_, sizeof(snapLow_));
-    memcpy(snapHi_, (const void *)hiBuf_, sizeof(snapHi_));
-    // consume the frame while the ISR is still locked out, otherwise a pulse that
-    // arrives between the copy and the reset is silently prepended to the next one
-    pbWrite_ = 0;
-    memset((void *)lowBuf_, 0, sizeof(lowBuf_));
-    memset((void *)hiBuf_, 0, sizeof(hiBuf_));
+  if (pendingReady_) {
+    // a frame the ISR parked when it ended - short of 73 pulses, or before this
+    // function got to it; see noteDiscardedFrame()
+    memcpy(snapLow_, pendingLow_, sizeof(snapLow_));
+    memcpy(snapHi_, pendingHi_, sizeof(snapHi_));
+    pulseCount = pendingPulses_;
+    pendingReady_ = false;
+    frameComplete = true;
+    parked = true;
+  } else {
+    pulseCount = pbWrite_;
+    // Only a full frame is taken while it is still in the live buffer. This
+    // used to accept anything from 65 pulses up, and with loop() running freely
+    // that meant every frame was taken at exactly 65 - before its last eight
+    // pulses, the group byte, had arrived. A frame that really is shorter is
+    // not lost by waiting: when it ends, the ISR parks it.
+    frameComplete = (lowBuf_[0] > 3650 && lowBuf_[0] < 4300) && (pulseCount >= FrameDecoder::kFullFrame && pulseCount <= 75);
+    if (frameComplete) {
+      memcpy(snapLow_, (const void *)lowBuf_, sizeof(snapLow_));
+      memcpy(snapHi_, (const void *)hiBuf_, sizeof(snapHi_));
+      // consume the frame while the ISR is still locked out, otherwise a pulse that
+      // arrives between the copy and the reset is silently prepended to the next one
+      pbWrite_ = 0;
+      memset((void *)lowBuf_, 0, sizeof(lowBuf_));
+      memset((void *)hiBuf_, 0, sizeof(hiBuf_));
+    }
   }
   portEXIT_CRITICAL(&rxMux_);
 
@@ -1125,42 +1159,13 @@ void JaroliftController::processRxData() {
   }
 
   diagFrames_++;
-  ESP_LOGD(TAG, "frame received | pulses: %u", pulseCount);
+  ESP_LOGD(TAG, "frame received | pulses: %u%s", pulseCount, parked ? " (parked)" : "");
 
-  // extract Hopcode (32 Bit)
-  rxHopCode_ = 0;
-  for (int i = 0; i < 32; i++) {
-    if (snapLow_[i + 1] < snapHi_[i + 1])
-      rxHopCode_ &= ~(1 << i);
-    else
-      rxHopCode_ |= (1 << i);
-  }
-
-  // extract Serial (28 Bit)
-  rxSerial_ = 0;
-  for (int i = 0; i < 28; i++) {
-    if (snapLow_[i + 33] < snapHi_[i + 33])
-      rxSerial_ &= ~(1 << i);
-    else
-      rxSerial_ |= (1 << i);
-  }
-
-  // extract function code (4 Bit)
-  rxFunction_ = 0;
-  for (int i = 0; i < 4; i++) {
-    if (snapLow_[61 + i] < snapHi_[61 + i])
-      rxFunction_ &= ~(1 << i);
-    else
-      rxFunction_ |= (1 << i);
-  }
-  // extract high disc - group bits (9-16 Bit)
-  rxDiscH_ = 0;
-  for (int i = 0; i < 8; i++) {
-    if (snapLow_[65 + i] < snapHi_[65 + i])
-      rxDiscH_ &= ~(1 << i);
-    else
-      rxDiscH_ |= (1 << i);
-  }
+  FrameDecoder::Fields fields = FrameDecoder::decode(snapLow_, snapHi_, pulseCount);
+  rxHopCode_ = fields.hop;
+  rxSerial_ = fields.serial;
+  rxFunction_ = fields.function;
+  rxDiscH_ = fields.group;
 
   rxKeyGen();
   uint32_t decoded = rxDecode();
@@ -1191,13 +1196,11 @@ void JaroliftController::processRxData() {
   // expired, so STOP presses hours apart eventually added up to a SHADE nobody
   // asked for. ShadeDetector keeps one run, per remote, measured in time held.
   //
-  // Only the low byte of the channel identifies the run. It comes from the
-  // decrypted hop code and is stable; the high byte comes from the frame's last
-  // eight pulses, which are currently decoded before they have arrived and
-  // differ from frame to frame of one press - comparing them broke every run
-  // apart, so a held STOP could miss its SHADE.
+  // The whole channel mask identifies the run. Its high byte was once decoded
+  // before the frame's last eight pulses arrived and broke every run apart;
+  // frames are taken whole now, so it is as stable as the low byte.
   uint8_t fnIn = rxFunction_;
-  rxFunction_ = shade_.update(rxSerial_, ch_low, rxFunction_, millis());
+  rxFunction_ = shade_.update(rxSerial_, channel, rxFunction_, millis());
   if (rxFunction_ == FCT_CODE_SHADE && fnIn == FCT_CODE_STOP) {
     ESP_LOGD(TAG, "long STOP press -> SHADE | serial: 0x%08lx | held %lu ms", (unsigned long)rxSerial_,
              (unsigned long)(shade_.lastMs - shade_.startMs));

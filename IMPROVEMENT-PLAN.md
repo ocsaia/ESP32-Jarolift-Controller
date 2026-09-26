@@ -278,13 +278,21 @@ rather than by an observed trace.
 
 Seen in the same capture, not yet acted on:
 
-- **Frames are taken at 65 pulses.** processRxData() accepts 65..75 and takes
-  the frame the moment the count reaches 65, but this remote sends 73 (sync,
-  32 hop, 28 serial, 4 function, 8 group bits). The last eight - the high byte
-  of the channel mask, channels 9-16 - have not arrived yet and decode as
-  whatever the buffer held: the capture shows `11111111`, `00000000` and
-  `00000001` for the same button. Upstream has the same fault. The tracker does
-  not use that field; the MQTT status telegram does.
+- ~~**Frames are taken at 65 pulses**~~ - fixed. processRxData() accepted
+  65..75 and, with loop() running freely, took every frame the moment it
+  reached 65 - but this remote sends 73 (sync, 32 hop, 28 serial, 4 function,
+  8 group bits), so the group byte, the high byte of the channel mask, was read
+  from the cleared buffer behind it: `11111111`, `00000000` and `00000001` for
+  the same button. Upstream has the same fault. A frame is now taken from the
+  live buffer only when it is whole (73 pulses). Waiting cannot lose a frame
+  that really is shorter: the only point at which a frame is known to have
+  ended is the ISR discarding it, and it now parks a complete frame
+  (sync + 65..75 pulses) in a one-frame slot instead - which also rescues a full
+  frame loop() did not reach in time, so `lost=` now means the slot was still
+  occupied. A group byte that was not captured whole reads as 0, not as 0xFF
+  (`FrameDecoder.h`, tests in `test/test_decode`). With the mask reliable again,
+  long-press runs are keyed on all of it, so channels 9-16 of a single-serial
+  handset are separate buttons.
 - ~~**No integrity check**~~ - fixed, and it turned out to matter more than it
   looked. After the loop() stall was removed, frames decoded at eight to nine a
   second against eight to nine sync pulses, and `lost` fell from three to five
